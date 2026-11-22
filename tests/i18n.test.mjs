@@ -248,7 +248,7 @@ test("manifest.json follows MV2 GeckoView built-in WebExtension contract", () =>
   const manifest = JSON.parse(manifestRaw);
 
   assert.equal(manifest.manifest_version, 2);
-  assert.equal(manifest.version, "1.0.2");
+  assert.equal(manifest.version, "1.0.3");
   assert.equal(manifest.browser_specific_settings?.gecko?.id, "ag-remote-zh@agremote.local");
 
   for (const perm of [
@@ -267,8 +267,17 @@ test("manifest.json follows MV2 GeckoView built-in WebExtension contract", () =>
   }
 
   assert.deepEqual(manifest.background?.scripts, ["background.js"]);
-  assert.equal(manifest.content_scripts.length, 1);
-  const cs = manifest.content_scripts[0];
+  assert.equal(manifest.content_scripts.length, 2);
+
+  const preconnectCs = manifest.content_scripts[0];
+  assert.ok(preconnectCs.matches.includes("https://antigravity.google.com/*"));
+  assert.ok(preconnectCs.matches.includes("https://antigravity.google/*"));
+  assert.ok(preconnectCs.matches.includes("https://*.antigravity.google/*"));
+  assert.deepEqual(preconnectCs.js, ["preconnect.js"]);
+  assert.equal(preconnectCs.run_at, "document_start");
+  assert.equal(preconnectCs.all_frames, false);
+
+  const cs = manifest.content_scripts[1];
   assert.ok(cs.matches.includes("https://antigravity.google.com/*"));
   assert.ok(cs.matches.includes("https://antigravity.google/*"));
   assert.ok(cs.matches.includes("https://*.antigravity.google/*"));
@@ -867,7 +876,7 @@ test("background.js and content.js wire native port READY, CONFIG_UPDATE, and ST
   vm.runInContext(bgSource, bgCtx);
 
   assert.equal(connectedAppId, "ag_remote_i18n");
-  assert.deepEqual(nativeMessagesSent[0], { type: "READY", version: "1.0.2" });
+  assert.deepEqual(nativeMessagesSent[0], { type: "READY", version: "1.0.3" });
 
   // Simulate Android -> Extension CONFIG_UPDATE
   for (const fn of portMessageListeners) {
@@ -1141,4 +1150,260 @@ test("background.js aggregates STATS across outer frame and iframe and relays AP
   const stalledWithDraft = nativeMessagesSent.find((m) => m.type === "STREAM_STALLED");
   assert.ok(stalledWithDraft);
   assert.equal(stalledWithDraft.hasDraft, true);
+});
+
+// ---------------------------------------------------------------------------
+// 11. Cellular/VPN Loading & Resume Optimization Tests (v1.0.3)
+// ---------------------------------------------------------------------------
+test("preconnect.js injects preconnect & dns-prefetch links and is idempotent on re-run", () => {
+  const preconnectSource = fs.readFileSync(path.join(EXT_DIR, "preconnect.js"), "utf8");
+  const doc = new MockDocument();
+  const head = new MockElement("head");
+  doc.head = head;
+  doc.documentElement.appendChild(head);
+
+  const ctx = {
+    globalThis: null,
+    document: doc,
+    Object,
+    Array,
+    String,
+    Boolean
+  };
+  ctx.globalThis = ctx;
+  vm.createContext(ctx);
+  vm.runInContext(preconnectSource, ctx);
+
+  const firstRunCount = head.childNodes.length;
+  assert.equal(firstRunCount, 8);
+  assert.ok(
+    head.childNodes.some(
+      (n) =>
+        n.tagName === "LINK" &&
+        n.getAttribute("rel") === "preconnect" &&
+        n.getAttribute("href") === "https://antigravity.static.usercontent.goog"
+    ),
+    "Expected <link rel='preconnect' href='https://antigravity.static.usercontent.goog'>"
+  );
+  assert.ok(
+    head.childNodes.some(
+      (n) =>
+        n.tagName === "LINK" &&
+        n.getAttribute("rel") === "preconnect" &&
+        n.getAttribute("href") === "https://fonts.gstatic.com" &&
+        n.getAttribute("crossorigin") === "anonymous"
+    ),
+    "Expected crossorigin='anonymous' for fonts.gstatic.com"
+  );
+
+  // Re-running script in same context must be a no-op
+  vm.runInContext(preconnectSource, ctx);
+  assert.equal(head.childNodes.length, firstRunCount);
+
+  // Even if guard is cleared, existing link deduplication prevents duplicate hints
+  ctx.__AG_PRECONNECT_INJECTED__ = false;
+  vm.runInContext(preconnectSource, ctx);
+  assert.equal(head.childNodes.length, firstRunCount);
+});
+
+function mountContentForStallTest({ href, bodyChildren, navigatorObj = {} }) {
+  const contentSource = fs.readFileSync(path.join(EXT_DIR, "content.js"), "utf8");
+  const doc = makeDoc(...bodyChildren);
+  doc.removeEventListener = (type, fn) => {
+    const list = doc._listeners.get(type);
+    if (!list) return;
+    const idx = list.indexOf(fn);
+    if (idx >= 0) list.splice(idx, 1);
+  };
+
+  const sentMessages = [];
+  const runtimeListeners = [];
+  const scheduledDelays = [];
+  const MockMO = createMockMutationObserverClass();
+  MockMO.instances = [];
+
+  const fastSetTimeout = (fn, ms) => {
+    scheduledDelays.push(ms);
+    return setTimeout(fn, Math.min(ms, 40));
+  };
+
+  const locationObj = { href };
+  const ctx = {
+    globalThis: null,
+    AG_I18N_DICT: dictZh,
+    AG_I18N_TRANSLATOR: translatorLib,
+    document: doc,
+    location: locationObj,
+    navigator: navigatorObj,
+    MutationObserver: MockMO,
+    Event: class MockEvent { constructor(t) { this.type = t; } },
+    dispatchEvent() {},
+    addEventListener() {},
+    removeEventListener() {},
+    browser: {
+      runtime: {
+        async sendMessage(msg) {
+          if (msg?.type === "GET_CONFIG") {
+            return { enabled: true, customDict: {} };
+          }
+          sentMessages.push(msg);
+          return { ok: true };
+        },
+        onMessage: { addListener: (fn) => runtimeListeners.push(fn) }
+      },
+      storage: {
+        local: { async get() { return { enabled: true, customDict: {} }; } },
+        onChanged: { addListener() {} }
+      }
+    },
+    Object, Array, String, Number, Boolean, Promise, Date, Math,
+    setTimeout: fastSetTimeout,
+    clearTimeout
+  };
+  ctx.globalThis = ctx;
+  vm.createContext(ctx);
+  vm.runInContext(contentSource, ctx);
+
+  return { doc, locationObj, sentMessages, runtimeListeners, scheduledDelays };
+}
+
+test("outer portal shell frame NEVER sends STREAM_STALLED even after long background", async () => {
+  const { runtimeListeners, sentMessages } = mountContentForStallTest({
+    href: "https://antigravity.google.com/r/sample-machine",
+    bodyChildren: [h("div", "Working"), h("textarea", { value: "" })]
+  });
+
+  await new Promise((r) => setTimeout(r, 15));
+  for (const fn of runtimeListeners) {
+    fn({ type: "APP_RESUMED", backgroundMs: 60000 });
+  }
+  await new Promise((r) => setTimeout(r, 70));
+
+  assert.equal(
+    sentMessages.some((m) => m.type === "STREAM_STALLED"),
+    false,
+    "Outer shell frame must never report STREAM_STALLED"
+  );
+});
+
+test("idle inner iframe without running task NEVER sends STREAM_STALLED even after long background", async () => {
+  const { runtimeListeners, sentMessages } = mountContentForStallTest({
+    href: "https://antigravity.static.usercontent.goog/web/2.34.0/c/idle-conv",
+    bodyChildren: [h("div", "Connected"), h("textarea", { value: "" })]
+  });
+
+  await new Promise((r) => setTimeout(r, 15));
+  for (const fn of runtimeListeners) {
+    fn({ type: "APP_RESUMED", backgroundMs: 60000 });
+  }
+  await new Promise((r) => setTimeout(r, 70));
+
+  assert.equal(
+    sentMessages.some((m) => m.type === "STREAM_STALLED"),
+    false,
+    "Idle inner iframe without running indicator must not trigger reload"
+  );
+});
+
+test("active inner iframe uses adaptive cellular timeout and cancels stall reload on user interaction or URL change", async () => {
+  // 1. Active running task on cellular network -> uses 6500ms watch window and reports STREAM_STALLED if frozen
+  const cell = mountContentForStallTest({
+    href: "https://antigravity.static.usercontent.goog/web/2.34.0/c/active-1",
+    bodyChildren: [h("div", "Working"), h("textarea", { value: "" })],
+    navigatorObj: { connection: { type: "cellular", effectiveType: "4g", rtt: 220 } }
+  });
+
+  await new Promise((r) => setTimeout(r, 15));
+  for (const fn of cell.runtimeListeners) {
+    fn({ type: "APP_RESUMED", backgroundMs: 12000 });
+  }
+  await new Promise((r) => setTimeout(r, 70));
+
+  assert.ok(cell.scheduledDelays.includes(6500), "Expected slow/cellular 6500ms stall watch window");
+  assert.equal(cell.sentMessages.filter((m) => m.type === "STREAM_STALLED").length, 1);
+
+  // 2. Active running task -> user taps during watch window -> cancels STREAM_STALLED
+  const interacted = mountContentForStallTest({
+    href: "https://antigravity.static.usercontent.goog/web/2.34.0/c/active-2",
+    bodyChildren: [h("div", "Thinking"), h("textarea", { value: "" })],
+    navigatorObj: { connection: { type: "wifi", effectiveType: "4g", rtt: 40 } }
+  });
+
+  await new Promise((r) => setTimeout(r, 15));
+  for (const fn of interacted.runtimeListeners) {
+    fn({ type: "APP_RESUMED", backgroundMs: 12000 });
+  }
+  assert.ok(interacted.scheduledDelays.includes(4500), "Expected base 4500ms stall watch window on fast network");
+  await new Promise((r) => setTimeout(r, 10));
+  interacted.doc.dispatchEvent({ type: "pointerdown" });
+  await new Promise((r) => setTimeout(r, 60));
+
+  assert.equal(
+    interacted.sentMessages.some((m) => m.type === "STREAM_STALLED"),
+    false,
+    "User pointerdown during watch window must cancel STREAM_STALLED"
+  );
+
+  // 3. Active running task -> URL navigates during watch window -> cancels STREAM_STALLED
+  const navigated = mountContentForStallTest({
+    href: "https://antigravity.static.usercontent.goog/web/2.34.0/c/active-3",
+    bodyChildren: [h("div", "Working"), h("textarea", { value: "" })]
+  });
+
+  await new Promise((r) => setTimeout(r, 15));
+  for (const fn of navigated.runtimeListeners) {
+    fn({ type: "APP_RESUMED", backgroundMs: 12000 });
+  }
+  await new Promise((r) => setTimeout(r, 10));
+  navigated.locationObj.href = "https://antigravity.static.usercontent.goog/web/2.34.0/c/active-4";
+  await new Promise((r) => setTimeout(r, 60));
+
+  assert.equal(
+    navigated.sentMessages.some((m) => m.type === "STREAM_STALLED"),
+    false,
+    "Route change during watch window must cancel STREAM_STALLED"
+  );
+});
+
+test("translator.js avoids getComputedStyle on non-matching & multi-word nodes while protecting icon ligatures", () => {
+  const dictSource = fs.readFileSync(path.join(EXT_DIR, "dict_zh.js"), "utf8");
+  const translatorSource = fs.readFileSync(path.join(EXT_DIR, "translator.js"), "utf8");
+
+  let computedStyleCalls = 0;
+  const sandbox = {
+    globalThis: null,
+    getComputedStyle(el) {
+      computedStyleCalls++;
+      return el.getAttribute("data-icon-font") === "true"
+        ? { fontFamily: '"Material Symbols Outlined"' }
+        : { fontFamily: "Inter, sans-serif" };
+    },
+    Set, Map, WeakMap, WeakRef, Object, Array, String, Number, Boolean, RegExp, Error,
+    setTimeout, clearTimeout
+  };
+  sandbox.globalThis = sandbox;
+  vm.createContext(sandbox);
+  vm.runInContext(dictSource, sandbox);
+  vm.runInContext(translatorSource, sandbox);
+
+  const prose1 = h("div", h("span", "Unmatched streaming response message text from assistant"));
+  const prose2 = h("p", "Another unmatched arbitrary log output line src/App.kt");
+  const btnNew = h("button", "New Conversation");
+  const btnAllow = h("button", "Allow once");
+  const capLabel = h("span", "Feedback");
+  const iconSpan = h("span", { "data-icon-font": "true" }, "feedback");
+  const doc = makeDoc(prose1, prose2, btnNew, btnAllow, capLabel, iconSpan);
+
+  const instance = sandbox.AG_I18N_TRANSLATOR.createTranslator({ dict: sandbox.AG_I18N_DICT });
+  instance.translateTree(doc);
+
+  assert.equal(btnNew.textContent, "新对话");
+  assert.equal(btnAllow.textContent, "仅允许这一次");
+  assert.equal(capLabel.textContent, "反馈");
+  assert.equal(iconSpan.textContent, "feedback");
+  assert.equal(
+    computedStyleCalls,
+    1,
+    `Expected getComputedStyle only for lowercase ligature candidate, got ${computedStyleCalls} calls`
+  );
 });

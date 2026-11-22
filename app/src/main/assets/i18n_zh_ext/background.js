@@ -2,7 +2,7 @@
   "use strict";
 
   const NATIVE_APP_ID = "ag_remote_i18n";
-  const EXT_VERSION = "1.0.2";
+  const EXT_VERSION = "1.0.3";
   const TAB_URL_PATTERNS = [
     "https://antigravity.google.com/*",
     "https://*.antigravity.google.com/*",

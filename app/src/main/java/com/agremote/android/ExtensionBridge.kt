@@ -118,7 +118,7 @@ class ExtensionBridge {
 
         when (json.optString("type")) {
             "READY" -> {
-                val version = json.optString("version", "1.0.2").ifBlank { "1.0.2" }
+                val version = json.optString("version", "1.0.3").ifBlank { "1.0.3" }
                 Log.i(TAG, "WebExtension READY version=$version")
                 updateState { it.copy(connected = true, ready = true, version = version) }
                 if (replyPort != null) {

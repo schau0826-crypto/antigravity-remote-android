@@ -13,10 +13,12 @@
   }
 
   const STATS_THROTTLE_MS = 1200;
-  const STALL_WATCH_MS = 2800;
+  const STALL_WATCH_BASE_MS = 4500;
+  const STALL_WATCH_SLOW_NET_MS = 6500;
   const RUNNING_TEXT_REGEX =
     /^(?:Working|执行中|工作中|Thinking|思考中|Running|运行中|Generating|生成中|Connecting|正在连接|Reconnecting|正在重连)(?=$|[\s.,:：!！…·()（）])/i;
-  const CONVERSATION_PATH_REGEX = /\/r\/|\/web\//i;
+  const INNER_CONVERSATION_URL_REGEX = /^https:\/\/[^/]*\.usercontent\.goog\/web\//i;
+  const INTERACTION_EVENTS = ["pointerdown", "keydown", "touchstart", "click"];
 
   let currentConfig = {
     enabled: true,
@@ -29,6 +31,7 @@
 
   let stallWatchTimer = null;
   let stallStreamObserver = null;
+  let detachInteractionListeners = null;
   let realStreamMutationCount = 0;
 
   const translator = TRANSLATOR_LIB.createTranslator({
@@ -201,16 +204,40 @@
     return false;
   }
 
-  function isConversationFrame() {
+  function getCurrentHref() {
     try {
-      const href = String(rootScope.location?.href || "");
-      if (CONVERSATION_PATH_REGEX.test(href)) {
-        return true;
+      return String(rootScope.location?.href || "");
+    } catch (_err) {
+      return "";
+    }
+  }
+
+  function isInnerConversationFrame() {
+    return INNER_CONVERSATION_URL_REGEX.test(getCurrentHref());
+  }
+
+  function resolveStallWatchMs() {
+    try {
+      const conn = rootScope.navigator && rootScope.navigator.connection;
+      if (conn && typeof conn === "object") {
+        const type = typeof conn.type === "string" ? conn.type.toLowerCase() : "";
+        const effectiveType = typeof conn.effectiveType === "string" ? conn.effectiveType.toLowerCase() : "";
+        const rtt = Number(conn.rtt);
+        if (
+          type === "cellular" ||
+          effectiveType === "slow-2g" ||
+          effectiveType === "2g" ||
+          effectiveType === "3g" ||
+          (Number.isFinite(rtt) && rtt >= 200) ||
+          conn.saveData === true
+        ) {
+          return STALL_WATCH_SLOW_NET_MS;
+        }
       }
     } catch (_err) {
-      // Ignore location access error
+      // Ignore NetworkInformation access errors
     }
-    return queryAllSafe("textarea, [contenteditable='true']").length > 0;
+    return STALL_WATCH_BASE_MS;
   }
 
   function dispatchWakeEvents() {
@@ -240,17 +267,68 @@
       stallStreamObserver.disconnect();
       stallStreamObserver = null;
     }
+    if (typeof detachInteractionListeners === "function") {
+      detachInteractionListeners();
+      detachInteractionListeners = null;
+    }
   }
 
   function startStallWatch(backgroundMs) {
     stopStallWatch();
-    const isRunning = hasRunningIndicator();
-    const inConversation = isConversationFrame();
-    if (!isRunning && !(inConversation && backgroundMs >= 25000)) {
+    // Only the inner workspace iframe owns live chat/task DOM; the outer portal shell stays static
+    // and would always false-trigger if watched. Never reload idle pages without an active task.
+    if (!isInnerConversationFrame() || !hasRunningIndicator()) {
       return;
     }
 
+    const watchStartHref = getCurrentHref();
+    let userInteractedDuringWatch = false;
     realStreamMutationCount = 0;
+
+    const cleanups = [];
+    const onUserInteraction = () => {
+      userInteractedDuringWatch = true;
+      stopStallWatch();
+    };
+    const listenerOpts = { capture: true, passive: true };
+    if (typeof rootScope.addEventListener === "function") {
+      for (const ev of INTERACTION_EVENTS) {
+        try {
+          rootScope.addEventListener(ev, onUserInteraction, listenerOpts);
+          cleanups.push(() => {
+            if (typeof rootScope.removeEventListener === "function") {
+              rootScope.removeEventListener(ev, onUserInteraction, listenerOpts);
+            }
+          });
+        } catch (_err) {
+          // Ignore
+        }
+      }
+    }
+    if (document && typeof document.addEventListener === "function") {
+      for (const ev of INTERACTION_EVENTS) {
+        try {
+          document.addEventListener(ev, onUserInteraction, listenerOpts);
+          cleanups.push(() => {
+            if (typeof document.removeEventListener === "function") {
+              document.removeEventListener(ev, onUserInteraction, listenerOpts);
+            }
+          });
+        } catch (_err) {
+          // Ignore
+        }
+      }
+    }
+    detachInteractionListeners = () => {
+      for (const fn of cleanups) {
+        try {
+          fn();
+        } catch (_err) {
+          // Ignore
+        }
+      }
+    };
+
     const ObserverCtor =
       rootScope.MutationObserver || (typeof MutationObserver !== "undefined" ? MutationObserver : null);
     const watchRoot = document.body || document.documentElement || document;
@@ -281,16 +359,16 @@
       });
     }
 
+    const watchTimeoutMs = resolveStallWatchMs();
     stallWatchTimer = setTimeout(() => {
       const mutationsSeen = realStreamMutationCount;
       const stillRunning = hasRunningIndicator();
       const draftPresent = hasUnsentDraft();
+      const urlChanged = getCurrentHref() !== watchStartHref;
+      const interacted = userInteractedDuringWatch;
       stopStallWatch();
 
-      if (mutationsSeen > 0) {
-        return;
-      }
-      if (!stillRunning && backgroundMs < 25000) {
+      if (mutationsSeen > 0 || interacted || urlChanged || !stillRunning) {
         return;
       }
 
@@ -303,7 +381,7 @@
           })
           .catch(() => {});
       }
-    }, STALL_WATCH_MS);
+    }, watchTimeoutMs);
   }
 
   function handleAppResumed(msg) {

@@ -4,7 +4,7 @@ English | [简体中文](README.zh-CN.md)
 
 [![Platform](https://img.shields.io/badge/Android-8.0%2B%20(API%2026)-3DDC84?logo=android&logoColor=white)](https://developer.android.com/)
 [![Engine](https://img.shields.io/badge/GeckoView-160-FF7139?logo=firefox&logoColor=white)](https://mozilla.github.io/geckoview/)
-[![Extension](https://img.shields.io/badge/i18n-Built--in%20%E4%B8%AD%E6%96%87%20v1.0.2-2563EB)](#built-in-chinese-localization-plugin)
+[![Extension](https://img.shields.io/badge/i18n-Built--in%20%E4%B8%AD%E6%96%87%20v1.0.3-2563EB)](#built-in-chinese-localization-plugin)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 An unofficial, open-source Android client for **Google Antigravity Remote Control**, built on **Mozilla GeckoView 160** and a bundled **WebExtension** (`ag-remote-zh@agremote.local`). It solves the everyday pain points of using the official mobile web dashboard—persistent sign-in, OAuth redirect handling, built-in Simplified Chinese UI localization, full-screen ergonomics, and background-resume stream recovery.
@@ -43,8 +43,8 @@ An unofficial, open-source Android client for **Google Antigravity Remote Contro
 - **Native System Integration**: Supports Android file picker uploads (`PromptDelegate`), Web Notifications forwarding, keep-screen-on toggle, and `https://antigravity.google.com/*` deep links.
 
 ### 4. Speed & Background Stream Recovery
-- **Cold-Start Pre-Warming & Direct Machine Launch**: Initializes and loads your last connected remote machine (`/r/...`) during `Application.onCreate()` so startup skips the device list.
-- **Foreground Wake & Stall Detector**: Keeps the primary session at `PRIORITY_HIGH`, dispatches `online` / `focus` / `visibilitychange` on return from background, and watches for frozen running streams (`Working` / `执行中`). If stalled and no unsent draft exists in the input box, it reloads seamlessly; if a draft is present, it shows a non-destructive toast reminder instead.
+- **Cold-Start Pre-Warming & Early Preconnect**: Initializes and loads your last connected remote machine (`/r/...`) during `Application.onCreate()`, disables GeckoView SafeBrowsing/tracking list sync & DoH probing (to avoid background VPN contention), and injects `document_start` `<link rel="preconnect">` hints for static iframe origins.
+- **Foreground Wake & Precision Stall Detector**: Keeps the primary session at `PRIORITY_HIGH`, dispatches `online` / `focus` / `visibilitychange` on return from background, and watches only the inner workspace iframe (`4.5s–6.5s` adaptive window) while a task is actively running (`Working` / `执行中`). Cancels immediately on user interaction or route changes; if genuinely stalled without an unsent draft, re-syncs without bypassing fresh static caches.
 
 ---
 
@@ -67,7 +67,7 @@ flowchart LR
 ## Quick Start
 
 ### Option A: Install Prebuilt APK (Recommended)
-1. Download `antigravity-remote-android-v1.0.2-arm64-v8a-debug.apk` from [**GitHub Releases**](https://github.com/schau0826-crypto/antigravity-remote-android/releases) and install it on your Android phone (Android 8.0+, `arm64-v8a`).
+1. Download `antigravity-remote-android-v1.0.3-arm64-v8a-debug.apk` from [**GitHub Releases**](https://github.com/schau0826-crypto/antigravity-remote-android/releases) and install it on your Android phone (Android 8.0+, `arm64-v8a`).
 2. On your computer, enable Antigravity Remote Control:
    - **Desktop App**: Open **Antigravity Desktop** → **Settings** → enable **Remote Control**, or
    - **CLI**: Run:
@@ -107,7 +107,7 @@ sdk.dir=/path/to/your/Android/sdk
 ### 2. Run Tests & Build APK
 
 ```bash
-# Run WebExtension JS unit tests (18 tests)
+# Run WebExtension JS unit tests (23 tests)
 node --test tests/i18n.test.mjs
 
 # Run Android JVM unit tests & build arm64-v8a Debug APK

@@ -464,7 +464,15 @@ class MainActivity : AppCompatActivity() {
         lastAutoReconnectAtMs = now
         Log.i(TAG, "Auto-reloading primarySession after background stall (${backgroundMs}ms)")
         Toast.makeText(this, "检测到后台断流，正在自动同步最新进度…", Toast.LENGTH_SHORT).show()
-        primarySession.reload()
+        if (UrlPolicy.isRememberableRemoteUrl(currentUrl)) {
+            primarySession.load(
+                GeckoSession.Loader()
+                    .uri(currentUrl)
+                    .flags(GeckoSession.LOAD_FLAGS_REPLACE_HISTORY)
+            )
+        } else {
+            primarySession.reload()
+        }
     }
 
     private fun showQuickMenuSheet() {
@@ -1312,7 +1320,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateExtStatusLabel(state: BridgeState) {
         val text = when {
-            state.ready -> "汉化已就绪 v${state.version ?: "1.0.2"} · 已译 ${state.translatedCount} 处"
+            state.ready -> "汉化已就绪 v${state.version ?: "1.0.3"} · 已译 ${state.translatedCount} 处"
             state.connected -> "汉化插件：已连接，初始化中..."
             else -> "汉化插件：等待端口连接..."
         }

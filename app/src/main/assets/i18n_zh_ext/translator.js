@@ -286,7 +286,21 @@
       }
     }
 
-    return isIconFontByComputedStyle(el);
+    if (textNode) {
+      if (el !== getParentElement(textNode)) {
+        return false;
+      }
+      const rawText = typeof textNode.nodeValue === "string" ? textNode.nodeValue.trim() : "";
+      if (!rawText || !LIGATURE_TOKEN_REGEX.test(rawText)) {
+        return false;
+      }
+      return isIconFontByComputedStyle(el);
+    }
+
+    if (tag === "SPAN" || tag === "I") {
+      return isIconFontByComputedStyle(el);
+    }
+    return false;
   }
 
   function hasCommonForbiddenFlags(el) {
@@ -627,34 +641,38 @@
       }
     }
 
-    function resolveCandidate(normalizedText, ancestorInfo) {
+    function lookupDictionaryOnly(normalizedText) {
       if (!normalizedText || isPunctuationOrNumberOnly(normalizedText)) {
         return null;
       }
 
       const exactVal = dict.lookupExact(normalizedText, customDict, customLowerMap);
-      let translated = null;
-      let isExact = false;
-
       if (exactVal !== null && exactVal !== normalizedText) {
-        translated = exactVal;
-        isExact = true;
-      } else {
-        if (normalizedText.length > 120) {
-          return null;
-        }
-        if (looksLikeCode(normalizedText) || hasMultipleSentences(normalizedText)) {
-          return null;
-        }
-        const regexVal = dict.lookupRegex(normalizedText);
-        if (regexVal !== null && regexVal !== normalizedText) {
-          translated = regexVal;
-        }
+        return { translated: exactVal, isExact: true };
       }
 
-      if (!translated) {
+      if (normalizedText.length > 120) {
         return null;
       }
+      if (looksLikeCode(normalizedText) || hasMultipleSentences(normalizedText)) {
+        return null;
+      }
+      const regexVal = dict.lookupRegex(normalizedText);
+      if (regexVal !== null && regexVal !== normalizedText) {
+        return { translated: regexVal, isExact: false };
+      }
+
+      return null;
+    }
+
+    function resolveCandidate(normalizedText, ancestorInfo, precomputedLookup) {
+      const lookup = precomputedLookup !== undefined
+        ? precomputedLookup
+        : lookupDictionaryOnly(normalizedText);
+      if (!lookup || !lookup.translated) {
+        return null;
+      }
+      const { translated, isExact } = lookup;
 
       if (ancestorInfo) {
         const { zone, proseBlock, inMarkdownBody } = ancestorInfo;
@@ -696,17 +714,24 @@
       return translated;
     }
 
+    function restoreTrackedTextNode(textNode, currentRaw) {
+      if (originalTextMap.has(textNode)) {
+        const orig = originalTextMap.get(textNode);
+        if (appliedTextMap.get(textNode) === currentRaw && currentRaw !== orig) {
+          textNode.nodeValue = orig;
+        }
+        originalTextMap.delete(textNode);
+        appliedTextMap.delete(textNode);
+        untrackTextNode(textNode);
+      }
+    }
+
     function translateTextNode(textNode) {
       if (!textNode || textNode.nodeType !== TEXT_NODE) {
         return false;
       }
       const currentRaw = textNode.nodeValue;
       if (typeof currentRaw !== "string" || !currentRaw) {
-        return false;
-      }
-
-      const info = inspectTextAncestors(textNode);
-      if (info.forbidden) {
         return false;
       }
 
@@ -719,8 +744,20 @@
       }
 
       const { leading, normalized, trailing } = splitWhitespace(sourceRaw);
-      const translatedCore = enabled ? resolveCandidate(normalized, info) : null;
+      const lookup = enabled ? lookupDictionaryOnly(normalized) : null;
+      if (!lookup) {
+        restoreTrackedTextNode(textNode, currentRaw);
+        return false;
+      }
 
+      // Walk ancestors only for dictionary matches to avoid layout thrashing on unmatched nodes.
+      const info = inspectTextAncestors(textNode);
+      if (info.forbidden) {
+        restoreTrackedTextNode(textNode, currentRaw);
+        return false;
+      }
+
+      const translatedCore = resolveCandidate(normalized, info, lookup);
       if (translatedCore && translatedCore !== normalized) {
         const nextRaw = leading + translatedCore + trailing;
         originalTextMap.set(textNode, sourceRaw);
@@ -732,16 +769,7 @@
         return true;
       }
 
-      // Previously translated, but no longer matches (e.g. customDict removed or disabled)
-      if (originalTextMap.has(textNode)) {
-        const orig = originalTextMap.get(textNode);
-        if (appliedTextMap.get(textNode) === currentRaw && currentRaw !== orig) {
-          textNode.nodeValue = orig;
-        }
-        originalTextMap.delete(textNode);
-        appliedTextMap.delete(textNode);
-        untrackTextNode(textNode);
-      }
+      restoreTrackedTextNode(textNode, currentRaw);
       return false;
     }
 

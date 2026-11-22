@@ -13,6 +13,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import org.mozilla.geckoview.ContentBlocking
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoRuntimeSettings
 import org.mozilla.geckoview.GeckoSession
@@ -67,6 +68,15 @@ class AntigravityApp : Application() {
         runtimeInstance?.let { return it }
         synchronized(this) {
             runtimeInstance?.let { return it }
+            // Dedicated Antigravity client routes third-party links externally; disable GeckoView
+            // SafeBrowsing/tracking list sync and DoH probing to prevent background VPN contention
+            // and Fake-IP DNS conflicts on cellular networks.
+            val contentBlocking = ContentBlocking.Settings.Builder()
+                .antiTracking(ContentBlocking.AntiTracking.NONE)
+                .safeBrowsing(ContentBlocking.SafeBrowsing.NONE)
+                .safeBrowsingRealTimeEnabled(false)
+                .build()
+
             val runtimeSettings = GeckoRuntimeSettings.Builder()
                 .javaScriptEnabled(true)
                 .webManifest(true)
@@ -77,11 +87,14 @@ class AntigravityApp : Application() {
                 .consoleOutput(false)
                 .remoteDebuggingEnabled(false)
                 .aboutConfigEnabled(false)
+                .trustedRecursiveResolverMode(GeckoRuntimeSettings.TRR_MODE_OFF)
+                .contentBlocking(contentBlocking)
                 .build()
 
             // Persistent default profile (never private mode) so Google login & cookies survive restarts.
             val runtime = GeckoRuntime.create(this, runtimeSettings)
             runtime.settings.fetchPriorityEnabled = true
+            runtime.settings.setDohAutoselectEnabled(false)
             runtime.webNotificationDelegate = webNotificationDelegate
             installBuiltInExtension(runtime)
             runtimeInstance = runtime
