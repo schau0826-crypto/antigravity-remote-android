@@ -1,87 +1,128 @@
 # Antigravity Remote Android
 
-> Unofficial Android GeckoView wrapper for Google Antigravity Remote Control, featuring persistent Google sign-in, built-in Simplified Chinese UI localization, immersive full-screen ergonomics, and foreground stream auto-recovery.
+English | [简体中文](README.zh-CN.md)
 
-基于 **Mozilla GeckoView 160 + 内置 WebExtension** 的 Google Antigravity Remote 手机端开源客户端（非官方社区外壳项目）。所有认证与远控通信均直接走官方 [antigravity.google.com](https://antigravity.google.com/) 通道，本地仅做浏览器引擎持久化、移动端展示微调与客户端界面汉化。
+[![Platform](https://img.shields.io/badge/Android-8.0%2B%20(API%2026)-3DDC84?logo=android&logoColor=white)](https://developer.android.com/)
+[![Engine](https://img.shields.io/badge/GeckoView-160-FF7139?logo=firefox&logoColor=white)](https://mozilla.github.io/geckoview/)
+[![Extension](https://img.shields.io/badge/i18n-Built--in%20%E4%B8%AD%E6%96%87%20v1.0.2-2563EB)](#built-in-chinese-localization-plugin)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
----
+An unofficial, open-source Android client for **Google Antigravity Remote Control**, built on **Mozilla GeckoView 160** and a bundled **WebExtension** (`ag-remote-zh@agremote.local`). It solves the everyday pain points of using the official mobile web dashboard—persistent sign-in, OAuth redirect handling, built-in Simplified Chinese UI localization, full-screen ergonomics, and background-resume stream recovery.
 
-## 核心特性
-
-- **GeckoView 160 标准内核与持久化登录**
-  - 采用 Mozilla GeckoView（标准 Firefox 内核），规避普通 Android `WebView` 被 Google OAuth 拦截的问题；
-  - 独立非隐私持久化 Profile，登录态与 Cookie 自动保留；
-  - 完整支持 Google 地区 SSO 域名（如 `accounts.google.com.hk` / `google.co.jp` 等）及应用内 OAuth 弹窗叠加视图，授权验证全程不跳出到外部浏览器。
-- **内置中文汉化插件 (`ag-remote-zh@agremote.local`, v1.0.2)**
-  - 开启 `all_frames: true`，同时覆盖外层入口页与 `antigravity.static.usercontent.goog` 内嵌对话窗口；
-  - 内置 480+ 条 Antigravity UI 精准词条与动态正则模板，自带 Material Icons / Symbols 字体连字保护，不损坏网页图标；
-  - 严格跳过 `<code>`、`<pre>`、`<textarea>`、代码编辑器及长段 AI/用户对话原文；
-  - 支持在悬浮快捷面板一键无损切换「中文 / 英文原版」，并支持在设置中通过 JSON 实时覆盖和扩展词条。
-- **沉浸式全屏界面与单手交互**
-  - 状态栏与导航栏自适应跟随手机系统浅色/深色模式，Web 画面占满全屏；
-  - 右侧边缘提供可上下拖拽的半透明悬浮条，单手点击呼出 Material 3 底部快捷面板（设备列表、返回、刷新、中英切换、桌面/移动 UA 切换、设置与清缓存）。
-- **加载提速与后台断流自愈**
-  - 应用启动即预热 `GeckoSession`，并自动记住上次连接的机器实例（`/r/...`），下次冷启动直达会话；
-  - 主页按返回键采用 `moveTaskToBack(true)` 后台保活，二次切回瞬时恢复；
-  - `PRIORITY_HIGH` 保活 + 从后台切回前台时自动派发唤醒事件并检测流是否卡死；检测到断流时自动热同步最新进展，**若输入框内有未发送草稿则仅弹出提醒绝不覆盖输入内容**。
+> All authentication, session traffic, and device connections go **directly** through the official [`https://antigravity.google.com/`](https://antigravity.google.com/) endpoints. This app does not proxy traffic, inspect credentials, or modify Antigravity's backend protocol.
 
 ---
 
-## 电脑端准备与手机使用
+## Why Use This Instead of a Mobile Browser?
 
-1. **在电脑端启用 Antigravity Remote Control**
-   - 方式一：打开 **Antigravity Desktop**，在设置中开启 **Remote Control**；
-   - 方式二：在终端运行：
+| Pain Point in Mobile Browsers | How This App Solves It |
+| :--- | :--- |
+| Repeatedly re-opening tabs & re-authenticating | Persistent non-private **GeckoView** profile keeps Google cookies across restarts (`Android WebView` `403 disallowed_useragent` bypassed natively because GeckoView is standard Firefox). |
+| Google verification jumping out to external browser | In-app `NavigationDelegate` & OAuth popup overlay keep `accounts.google.*` regional SSO flows (`accounts.google.com.hk`, `google.co.jp`, etc.) inside the app. |
+| English-only interface & tiny mobile browser chrome | Built-in **WebExtension** translates 480+ Antigravity UI controls & dynamic badges into Simplified Chinese across both outer shell and inner iframe—with one-tap lossless toggle back to English. |
+| Slow cold reloads & frozen streams after backgrounding | Pre-warms `GeckoSession` on startup, remembers your last machine (`/r/...`), keeps the session warm on Back (`moveTaskToBack`), and auto-recovers stalled streams on foreground resume while protecting unsent drafts. |
+
+---
+
+## Features
+
+### 1. Persistent Google Login & Safe Navigation
+- **Full OAuth Popup Overlay**: Handles `window.open` and multi-step Google SSO verification flows inside an in-app popup `GeckoView`.
+- **Smart URL Policy**: Keeps Antigravity (`antigravity.google.com`, `antigravity.static.usercontent.goog`) and Google auth domains in-app; sends external third-party links tapped by the user to the system browser.
+
+### 2. Built-in Chinese Localization Plugin
+- **Cross-Frame Coverage (`all_frames: true`)**: Translates both the outer portal and the `antigravity.static.usercontent.goog` chat/workspace iframe.
+- **Icon & Code Protection**:
+  - Preserves Material Icons / Material Symbols ligatures (no broken icon glyphs) and skips `<code>`, `<pre>`, `<kbd>`, `<textarea>`, Monaco/CodeMirror editors, and `[data-no-translate]` blocks.
+  - Protects AI/user conversation prose so only buttons, menus, approval actions, timestamps, and status indicators are localized.
+- **Live Lossless Toggle & Custom JSON Dictionary**: Switch between **中文** and **English** instantly without reloading, or add custom JSON overrides in Settings for real-time hot updates via native messaging (`ag_remote_i18n`).
+
+### 3. Immersive Mobile UI & Ergonomics
+- **Adaptive Light & Dark System Bars**: Automatically matches your phone's light/dark theme with zero clashing top bars.
+- **Draggable Right-Edge Floating Handle**: Tap to open a clean Material 3 bottom sheet with one-thumb access to **Devices List**, **Back**, **Sync/Reload**, **中文 / EN**, **Desktop / Mobile UA**, **Settings**, and **Clear Cache** (preserving login cookies). Drag vertically to dock anywhere along the right edge.
+- **Native System Integration**: Supports Android file picker uploads (`PromptDelegate`), Web Notifications forwarding, keep-screen-on toggle, and `https://antigravity.google.com/*` deep links.
+
+### 4. Speed & Background Stream Recovery
+- **Cold-Start Pre-Warming & Direct Machine Launch**: Initializes and loads your last connected remote machine (`/r/...`) during `Application.onCreate()` so startup skips the device list.
+- **Foreground Wake & Stall Detector**: Keeps the primary session at `PRIORITY_HIGH`, dispatches `online` / `focus` / `visibilitychange` on return from background, and watches for frozen running streams (`Working` / `执行中`). If stalled and no unsent draft exists in the input box, it reloads seamlessly; if a draft is present, it shows a non-destructive toast reminder instead.
+
+---
+
+## Architecture
+
+```mermaid
+flowchart LR
+    UI["MainActivity + BottomSheet<br/>(Kotlin / Material 3)"] -->|Native Messaging<br/>ag_remote_i18n| BG["background.js<br/>(WebExtension MV2)"]
+    UI -->|Hosts| GV["GeckoView 160<br/>Persistent Profile"]
+    BG -->|CONFIG_UPDATE / APP_RESUMED| CS["content.js + translator.js<br/>(all_frames: true)"]
+    CS -->|STATS / STREAM_STALLED| BG
+    GV -->|Renders| OUTER["antigravity.google.com"]
+    OUTER -->|Embeds| IFRAME["antigravity.static.usercontent.goog<br/>(Remote Chat & Controls)"]
+    CS -.->|Non-destructive UI i18n & CSS| OUTER
+    CS -.->|Non-destructive UI i18n & CSS| IFRAME
+```
+
+---
+
+## Quick Start
+
+### Option A: Install Prebuilt APK (Recommended)
+1. Download `antigravity-remote-android-v1.0.2-arm64-v8a-debug.apk` from [**GitHub Releases**](https://github.com/schau0826-crypto/antigravity-remote-android/releases) and install it on your Android phone (Android 8.0+, `arm64-v8a`).
+2. On your computer, enable Antigravity Remote Control:
+   - **Desktop App**: Open **Antigravity Desktop** → **Settings** → enable **Remote Control**, or
+   - **CLI**: Run:
      ```bash
      agy remote-control start
      ```
-2. **确保网络可达**：确认手机当前网络可访问 `antigravity.google.com` 与 `accounts.google.com`。
-3. **安装与使用**：
-   - 将构建生成的 APK 安装到 Android 手机（`minSdk 26`，默认 `arm64-v8a`）；
-   - 打开 App 完成一次 Google 账号登录即可长期免登使用；
-   - 点击右侧边缘悬浮条呼出快捷面板，或在「更多设置 → 自定义汉化词典」里输入 JSON 键值对热更新翻译：
-     ```json
-     {
-       "Remote Control": "远程控制",
-       "Allow in sandbox": "允许在沙盒中运行"
-     }
-     ```
+3. Ensure your phone can reach `antigravity.google.com` and `accounts.google.com`, open **Antigravity 远程**, and sign in with your Google account once.
+
+### Customizing Translations (No Rebuild Required)
+Tap the **right-edge floating handle** → **更多设置 (Settings)** → **自定义汉化词典 (Custom Dictionary JSON)** and enter any key-value overrides:
+
+```json
+{
+  "Remote Control": "远程控制",
+  "Allow in sandbox": "允许在沙盒中运行"
+}
+```
+
+Save to apply live across all open frames.
 
 ---
 
-## 从源码构建与测试
+## Build & Test from Source
 
-### 环境要求
-- **JDK 17 或 JDK 21**（例如 Android Studio 内置 JBR）
-- **Android SDK**（`compileSdk 36`、`targetSdk 35`、`minSdk 26`）
-- **Node.js 18+**（运行 WebExtension JS 单元测试）
+### Prerequisites
+- **JDK 17 or 21** (e.g., Android Studio embedded JBR)
+- **Android SDK** (`compileSdk 36`, `targetSdk 35`, `minSdk 26`)
+- **Node.js 18+** (for WebExtension JS unit tests)
 
-### 本地配置 `local.properties`
-仓库默认忽略 `local.properties`（本机路径不会提交到 Git），构建前请在项目根目录创建该文件并指向你的本地 Android SDK：
+### 1. Configure Local SDK Path
+Create `local.properties` in the project root (gitignored by default):
 
 ```properties
 sdk.dir=/path/to/your/Android/sdk
 ```
 
-### 常用命令
+### 2. Run Tests & Build APK
 
 ```bash
-# 1. 运行内置 WebExtension 单元测试
+# Run WebExtension JS unit tests (18 tests)
 node --test tests/i18n.test.mjs
 
-# 2. 运行 Android JVM 单元测试并构建 arm64-v8a Debug APK
+# Run Android JVM unit tests & build arm64-v8a Debug APK
 ./gradlew testDebugUnitTest assembleDebug
 
-# 3. 如需包含全部 ABI 的通用 APK
+# Build a universal multi-ABI APK (larger size)
 ./gradlew -Puniversal=true assembleDebug
 
-# 4. 通过 ADB 安装到手机
+# Install directly over ADB
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
 ---
 
-## 免责声明与许可
+## Disclaimer & License
 
-- 本项目为社区个人开源封装工具，与 Google 或 Mozilla 无官方关联；请遵守相关服务条款并在合法网络环境下使用。
-- 本项目基于 [MIT License](LICENSE) 开源。
+- **Unofficial Project**: This is an independent community wrapper and is not affiliated with, endorsed by, or maintained by Google or Mozilla. Please comply with applicable Terms of Service.
+- **License**: Released under the [MIT License](LICENSE).
