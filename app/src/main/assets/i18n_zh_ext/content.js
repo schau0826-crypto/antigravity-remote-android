@@ -11,6 +11,7 @@
   if (!DICT || !TRANSLATOR_LIB) {
     return;
   }
+  const SESSION_PROBE = rootScope.AG_SESSION_PROBE || null;
 
   const STATS_THROTTLE_MS = 1200;
   const STALL_WATCH_BASE_MS = 4500;
@@ -33,6 +34,9 @@
   let stallStreamObserver = null;
   let detachInteractionListeners = null;
   let realStreamMutationCount = 0;
+  let lastSnapshotSig = "";
+  let snapshotIntervalId = null;
+  let switchRefreshTimers = [];
 
   const translator = TRANSLATOR_LIB.createTranslator({
     dict: DICT,
@@ -384,6 +388,146 @@
     }, watchTimeoutMs);
   }
 
+  function buildSnapshotSignature(snapshot) {
+    if (!snapshot || typeof snapshot !== "object") {
+      return "";
+    }
+    const ctx = snapshot.context || null;
+    const ctxSig = ctx
+      ? [
+          ctx.status,
+          ctx.modelName,
+          ctx.usedTokens,
+          ctx.maxTokens,
+          ctx.contextPct,
+          ctx.inputTokens,
+          ctx.cacheReadTokens,
+          ctx.outputTokens,
+          ctx.thinkingTokens,
+          ctx.stepCount,
+          ctx.compactedCount,
+          ctx.activeSubagents ? 1 : 0,
+          ctx.backgroundCmdCount,
+          ctx.errorMessage
+        ].join("|")
+      : "null";
+    const convs = Array.isArray(snapshot.recentConversations)
+      ? snapshot.recentConversations
+          .map((c) => `${c.cascadeId}:${c.status}:${c.stepCount}:${c.isCurrent ? 1 : 0}:${c.lastActiveMs}:${c.title}`)
+          .join(";")
+      : "";
+    const meta = snapshot.probeMeta || {};
+    const metaSig = `${meta.hasStore ? 1 : 0}:${meta.hasRouter ? 1 : 0}:${meta.hasAsp ? 1 : 0}:${meta.summaryCount || 0}`;
+    return `${snapshot.currentConversationId || ""}#${ctxSig}#${convs}#${metaSig}`;
+  }
+
+  function pushSessionSnapshot(force) {
+    if (!SESSION_PROBE || !isInnerConversationFrame()) {
+      return;
+    }
+    let snapshot = null;
+    try {
+      snapshot = SESSION_PROBE.collectSnapshot(document, rootScope);
+    } catch (_err) {
+      return;
+    }
+    if (!snapshot) {
+      return;
+    }
+    const sig = buildSnapshotSignature(snapshot);
+    if (!force && sig === lastSnapshotSig) {
+      return;
+    }
+    lastSnapshotSig = sig;
+    if (typeof browser !== "undefined" && browser.runtime && typeof browser.runtime.sendMessage === "function") {
+      browser.runtime
+        .sendMessage({
+          type: "SESSION_SNAPSHOT",
+          currentConversationId: snapshot.currentConversationId || "",
+          context: snapshot.context || null,
+          recentConversations: Array.isArray(snapshot.recentConversations) ? snapshot.recentConversations : [],
+          probeMeta: snapshot.probeMeta || null,
+          updatedAtMs: snapshot.updatedAtMs || Date.now()
+        })
+        .catch(() => {});
+    }
+  }
+
+  function startSnapshotPolling() {
+    if (!SESSION_PROBE || !isInnerConversationFrame()) {
+      return;
+    }
+    pushSessionSnapshot(true);
+    setTimeout(() => {
+      pushSessionSnapshot(true);
+    }, 1500);
+    if (snapshotIntervalId === null && typeof setInterval === "function") {
+      snapshotIntervalId = setInterval(() => {
+        if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+          return;
+        }
+        pushSessionSnapshot(false);
+      }, 3000);
+    }
+  }
+
+  async function handleSwitchConversation(msg) {
+    if (!isInnerConversationFrame()) {
+      return;
+    }
+    const requestId = String(msg?.requestId || "");
+    const cascadeId = String(msg?.cascadeId || "");
+    const projectId = String(msg?.projectId || "");
+    let res = { switched: false, method: "none", error: "" };
+    if (SESSION_PROBE) {
+      try {
+        if (typeof SESSION_PROBE.switchConversationAsync === "function") {
+          res = (await SESSION_PROBE.switchConversationAsync(document, rootScope, cascadeId, projectId)) || res;
+        } else if (typeof SESSION_PROBE.switchConversation === "function") {
+          res = SESSION_PROBE.switchConversation(document, rootScope, cascadeId, projectId) || res;
+        }
+      } catch (err) {
+        res = {
+          switched: false,
+          method: "none",
+          error: String((err && err.message) || err || "switch_error").slice(0, 120)
+        };
+      }
+    }
+
+    if (typeof browser !== "undefined" && browser.runtime && typeof browser.runtime.sendMessage === "function") {
+      browser.runtime
+        .sendMessage({
+          type: "SWITCH_RESULT",
+          requestId,
+          cascadeId,
+          projectId,
+          switched: Boolean(res.switched),
+          method: String(res.method || "none"),
+          error: String(res.error || "").slice(0, 120)
+        })
+        .catch(() => {});
+    }
+
+    if (res.switched) {
+      for (let i = 0; i < switchRefreshTimers.length; i++) {
+        clearTimeout(switchRefreshTimers[i]);
+      }
+      switchRefreshTimers = [];
+      pushSessionSnapshot(true);
+      switchRefreshTimers.push(
+        setTimeout(() => {
+          pushSessionSnapshot(true);
+        }, 400)
+      );
+      switchRefreshTimers.push(
+        setTimeout(() => {
+          pushSessionSnapshot(true);
+        }, 1100)
+      );
+    }
+  }
+
   function handleAppResumed(msg) {
     const backgroundMs = Number.isFinite(Number(msg?.backgroundMs))
       ? Math.max(0, Math.floor(Number(msg.backgroundMs)))
@@ -394,6 +538,10 @@
     if (currentConfig.enabled) {
       const stats = translator.translateTree(document);
       reportStats(stats.translatedCount, false);
+    }
+
+    if (isInnerConversationFrame()) {
+      pushSessionSnapshot(true);
     }
 
     if (backgroundMs >= 2000) {
@@ -434,6 +582,10 @@
         applyConfig(msg);
       } else if (msg.type === "APP_RESUMED") {
         handleAppResumed(msg);
+      } else if (msg.type === "REQUEST_SNAPSHOT") {
+        pushSessionSnapshot(true);
+      } else if (msg.type === "SWITCH_CONVERSATION") {
+        handleSwitchConversation(msg);
       }
       return undefined;
     });
@@ -458,6 +610,7 @@
   async function init() {
     const initial = await fetchInitialConfig();
     applyConfig(initial);
+    startSnapshotPolling();
   }
 
   if (document.readyState === "loading") {

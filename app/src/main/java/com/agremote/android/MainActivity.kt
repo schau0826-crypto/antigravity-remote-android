@@ -5,7 +5,9 @@ import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.content.res.Configuration
+import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -66,6 +68,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var loadingOverlay: LinearLayout
     private lateinit var btnRetryLoad: Button
     private lateinit var fabQuickMenu: FrameLayout
+    private lateinit var viewFabStatusDot: View
+    private lateinit var tvFabCtxPct: TextView
 
     private lateinit var popupContainer: LinearLayout
     private lateinit var popupTitle: TextView
@@ -82,6 +86,7 @@ class MainActivity : AppCompatActivity() {
 
     private var quickMenuSheet: BottomSheetDialog? = null
     private var sheetStatusView: TextView? = null
+    private var sheetTelemetryViews: QuickSheetTelemetryViews? = null
     private var settingsDialog: AlertDialog? = null
     private var settingsExtStatusView: TextView? = null
 
@@ -90,6 +95,21 @@ class MainActivity : AppCompatActivity() {
     private var lastBackgroundAtMs = 0L
     private var handledStallForCurrentResume = false
     private var lastAutoReconnectAtMs = 0L
+    private var switchCounter = 0
+    private var pendingSwitchRequestId: String? = null
+    private var pendingSwitchFallbackRunnable: Runnable? = null
+
+    private data class QuickSheetTelemetryViews(
+        val cardContextTelemetry: LinearLayout,
+        val tvCtxModel: TextView,
+        val tvCtxStatusBadge: TextView,
+        val layoutCtxUsage: LinearLayout,
+        val tvCtxUsageText: TextView,
+        val progressCtxUsage: ProgressBar,
+        val tvCtxMetricsDetail: TextView,
+        val containerRecentConversations: LinearLayout,
+        val tvRecentConvEmpty: TextView
+    )
 
     private val retryPromptRunnable = Runnable {
         if (!loadingDismissed && loadingOverlay.visibility == View.VISIBLE) {
@@ -158,6 +178,11 @@ class MainActivity : AppCompatActivity() {
         updateExtStatusLabel(state)
     }
 
+    private val snapshotListener: (SessionSnapshot) -> Unit = { snapshot ->
+        updateFloatingHandleTelemetry(snapshot)
+        renderQuickSheetTelemetry(snapshot)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -175,8 +200,12 @@ class MainActivity : AppCompatActivity() {
         setupBackNavigation()
 
         app.extensionBridge.addListener(bridgeListener)
+        app.extensionBridge.addSnapshotListener(snapshotListener)
         app.extensionBridge.onStreamStalledListener = { hasDraft, backgroundMs ->
             handleStreamStalledFromExtension(hasDraft, backgroundMs)
+        }
+        app.extensionBridge.onSwitchResultListener = { requestId, cascadeId, projectId, switched ->
+            handleSwitchResultFromExtension(requestId, cascadeId, projectId, switched)
         }
         app.extensionBridge.updateConfig(currentSettings)
         applyKeepScreenOn(currentSettings.keepScreenOn)
@@ -267,10 +296,14 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         mainHandler.removeCallbacks(retryPromptRunnable)
+        clearPendingSwitchFallback()
         app.extensionBridge.onStreamStalledListener = null
+        app.extensionBridge.onSwitchResultListener = null
         app.extensionBridge.removeListener(bridgeListener)
+        app.extensionBridge.removeSnapshotListener(snapshotListener)
         quickMenuSheet?.dismiss()
         quickMenuSheet = null
+        sheetTelemetryViews = null
         settingsDialog?.dismiss()
         settingsDialog = null
 
@@ -301,6 +334,8 @@ class MainActivity : AppCompatActivity() {
         loadingOverlay = findViewById(R.id.loading_overlay)
         btnRetryLoad = findViewById(R.id.btn_retry_load)
         fabQuickMenu = findViewById(R.id.fab_quick_menu)
+        viewFabStatusDot = findViewById(R.id.view_fab_status_dot)
+        tvFabCtxPct = findViewById(R.id.tv_fab_ctx_pct)
 
         popupContainer = findViewById(R.id.popup_container)
         popupTitle = findViewById(R.id.popup_title)
@@ -405,7 +440,7 @@ class MainActivity : AppCompatActivity() {
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    view.alpha = 0.82f
+                    view.alpha = 0.88f
                     if (dragging) {
                         val availableHeight = getFabAvailableHeight().coerceAtLeast(1f)
                         val ratio = (view.translationY / availableHeight).coerceIn(0.15f, 0.85f)
@@ -417,7 +452,7 @@ class MainActivity : AppCompatActivity() {
                     true
                 }
                 MotionEvent.ACTION_CANCEL -> {
-                    view.alpha = 0.82f
+                    view.alpha = 0.88f
                     true
                 }
                 else -> false
@@ -483,6 +518,17 @@ class MainActivity : AppCompatActivity() {
         sheet.setContentView(view)
 
         val tvSheetStatus = view.findViewById<TextView>(R.id.tv_sheet_status)
+        val telemetryViews = QuickSheetTelemetryViews(
+            cardContextTelemetry = view.findViewById(R.id.card_context_telemetry),
+            tvCtxModel = view.findViewById(R.id.tv_ctx_model),
+            tvCtxStatusBadge = view.findViewById(R.id.tv_ctx_status_badge),
+            layoutCtxUsage = view.findViewById(R.id.layout_ctx_usage),
+            tvCtxUsageText = view.findViewById(R.id.tv_ctx_usage_text),
+            progressCtxUsage = view.findViewById(R.id.progress_ctx_usage),
+            tvCtxMetricsDetail = view.findViewById(R.id.tv_ctx_metrics_detail),
+            containerRecentConversations = view.findViewById(R.id.container_recent_conversations),
+            tvRecentConvEmpty = view.findViewById(R.id.tv_recent_conv_empty)
+        )
         val tileHome = view.findViewById<LinearLayout>(R.id.tile_home)
         val tileBack = view.findViewById<LinearLayout>(R.id.tile_back)
         val tileReload = view.findViewById<LinearLayout>(R.id.tile_reload)
@@ -496,7 +542,10 @@ class MainActivity : AppCompatActivity() {
         val btnClearCache = view.findViewById<TextView>(R.id.btn_sheet_clear_cache)
 
         sheetStatusView = tvSheetStatus
+        sheetTelemetryViews = telemetryViews
         updateExtStatusLabel(app.extensionBridge.state)
+        renderQuickSheetTelemetry(app.extensionBridge.latestSnapshot)
+        app.extensionBridge.requestSessionSnapshot()
 
         tileBack.isEnabled = primaryCanGoBack
         tileBack.alpha = if (primaryCanGoBack) 1.0f else 0.42f
@@ -588,11 +637,240 @@ class MainActivity : AppCompatActivity() {
             if (quickMenuSheet === sheet) {
                 quickMenuSheet = null
                 sheetStatusView = null
+                sheetTelemetryViews = null
             }
         }
 
         quickMenuSheet = sheet
         sheet.show()
+    }
+
+    private fun resolveStatusAppearance(status: SessionRunStatus): Triple<Int, Int, Int> {
+        return when (status) {
+            SessionRunStatus.RUNNING -> Triple(R.string.status_running, R.color.ag_primary, R.color.ag_primary_soft)
+            SessionRunStatus.WAITING -> Triple(R.string.status_waiting, R.color.ag_warning, R.color.ag_warning_soft)
+            SessionRunStatus.ERROR -> Triple(R.string.status_error, R.color.ag_error, R.color.ag_error_soft)
+            SessionRunStatus.IDLE -> Triple(R.string.status_idle, R.color.ag_text_secondary, R.color.ag_idle_soft)
+        }
+    }
+
+    private fun applyStatusPill(badge: TextView, status: SessionRunStatus) {
+        val (labelRes, fgColorRes, bgColorRes) = resolveStatusAppearance(status)
+        badge.setText(labelRes)
+        badge.setTextColor(ContextCompat.getColor(this, fgColorRes))
+        badge.backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(this, bgColorRes))
+    }
+
+    private fun updateFloatingHandleTelemetry(snapshot: SessionSnapshot) {
+        val ctx = snapshot.context
+        if (ctx == null) {
+            viewFabStatusDot.visibility = View.GONE
+            tvFabCtxPct.visibility = View.GONE
+            return
+        }
+
+        val dotColorRes = when (ctx.status) {
+            SessionRunStatus.RUNNING -> R.color.ag_primary
+            SessionRunStatus.WAITING -> R.color.ag_warning
+            SessionRunStatus.ERROR -> R.color.ag_error
+            SessionRunStatus.IDLE -> R.color.ag_success
+        }
+        viewFabStatusDot.backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(this, dotColorRes))
+        viewFabStatusDot.visibility = View.VISIBLE
+
+        val pct = ctx.contextPct
+        if (pct != null) {
+            tvFabCtxPct.text = "${pct}%"
+            val pctColorRes = when {
+                pct >= 85 -> R.color.ag_error
+                pct >= 70 -> R.color.ag_warning
+                else -> R.color.ag_text_primary
+            }
+            tvFabCtxPct.setTextColor(ContextCompat.getColor(this, pctColorRes))
+            tvFabCtxPct.visibility = View.VISIBLE
+        } else {
+            tvFabCtxPct.visibility = View.GONE
+        }
+    }
+
+    private fun renderQuickSheetTelemetry(snapshot: SessionSnapshot) {
+        val views = sheetTelemetryViews ?: return
+        val ctx = snapshot.context
+        if (ctx == null) {
+            views.cardContextTelemetry.visibility = View.GONE
+        } else {
+            views.cardContextTelemetry.visibility = View.VISIBLE
+            views.tvCtxModel.text = ctx.modelName.ifEmpty { "Antigravity 会话" }
+            applyStatusPill(views.tvCtxStatusBadge, ctx.status)
+
+            if (ctx.maxTokens > 0L || ctx.usedTokens > 0L) {
+                views.layoutCtxUsage.visibility = View.VISIBLE
+                val compactHint = if (ctx.compactedCount > 0) " · 已压缩 ${ctx.compactedCount} 次" else ""
+                views.tvCtxUsageText.text = if (ctx.maxTokens > 0L) {
+                    val pctValue = ctx.contextPct ?: 0
+                    "Ctx ${pctValue}% · ${SessionTelemetryParser.formatCompactTokens(ctx.usedTokens)} / ${SessionTelemetryParser.formatContextLimit(ctx.maxTokens)}$compactHint"
+                } else {
+                    "Ctx ${SessionTelemetryParser.formatCompactTokens(ctx.usedTokens)} tokens$compactHint"
+                }
+                val progressPct = (ctx.contextPct ?: 0).coerceIn(0, 100)
+                views.progressCtxUsage.progress = progressPct
+                val barColorRes = when {
+                    progressPct >= 85 -> R.color.ag_error
+                    progressPct >= 70 -> R.color.ag_warning
+                    else -> R.color.ag_primary
+                }
+                views.progressCtxUsage.progressTintList =
+                    ColorStateList.valueOf(ContextCompat.getColor(this, barColorRes))
+            } else {
+                views.layoutCtxUsage.visibility = View.GONE
+            }
+
+            val detailParts = buildList {
+                if (ctx.status == SessionRunStatus.ERROR && ctx.errorMessage.isNotEmpty()) {
+                    add("异常：${ctx.errorMessage}")
+                }
+                if (ctx.inputTokens > 0L) {
+                    add("输入 ${SessionTelemetryParser.formatCompactTokens(ctx.inputTokens)}")
+                }
+                if (ctx.cacheHitPct != null) {
+                    add("缓存 ${ctx.cacheHitPct}%")
+                }
+                if (ctx.outputTokens > 0L) {
+                    add("输出 ${SessionTelemetryParser.formatCompactTokens(ctx.outputTokens)}")
+                }
+                if (ctx.thinkingTokens > 0L) {
+                    add("思考 ${SessionTelemetryParser.formatCompactTokens(ctx.thinkingTokens)}")
+                }
+                if (ctx.stepCount > 0) {
+                    add("步数 ${ctx.stepCount}")
+                }
+                if (ctx.activeSubagents) {
+                    add("子代理运行中")
+                }
+                if (ctx.backgroundCmdCount > 0) {
+                    add("后台命令 ${ctx.backgroundCmdCount}")
+                }
+            }
+            if (detailParts.isEmpty()) {
+                views.tvCtxMetricsDetail.visibility = View.GONE
+            } else {
+                views.tvCtxMetricsDetail.text = detailParts.joinToString(" · ")
+                views.tvCtxMetricsDetail.visibility = View.VISIBLE
+            }
+        }
+
+        views.containerRecentConversations.removeAllViews()
+        if (snapshot.recentConversations.isEmpty()) {
+            views.containerRecentConversations.visibility = View.GONE
+            views.tvRecentConvEmpty.visibility = View.VISIBLE
+        } else {
+            views.containerRecentConversations.visibility = View.VISIBLE
+            views.tvRecentConvEmpty.visibility = View.GONE
+            val nowMs = System.currentTimeMillis()
+            for (item in snapshot.recentConversations) {
+                val row = layoutInflater.inflate(
+                    R.layout.item_recent_conversation,
+                    views.containerRecentConversations,
+                    false
+                )
+                row.setBackgroundResource(
+                    if (item.isCurrent) R.drawable.bg_conv_item_active else R.drawable.bg_conv_item
+                )
+                val tvTitle = row.findViewById<TextView>(R.id.tv_conv_title)
+                val tvMeta = row.findViewById<TextView>(R.id.tv_conv_meta)
+                val tvStatus = row.findViewById<TextView>(R.id.tv_conv_status)
+
+                tvTitle.text = item.title
+                tvTitle.setTypeface(null, if (item.isCurrent) Typeface.BOLD else Typeface.NORMAL)
+
+                val metaParts = buildList {
+                    if (item.isCurrent) add(getString(R.string.conv_current_prefix))
+                    val rel = SessionTelemetryParser.formatRelativeTime(item.lastActiveMs, nowMs)
+                    if (rel.isNotEmpty()) add(rel)
+                    if (item.workspaceName.isNotEmpty()) add(item.workspaceName)
+                    if (item.stepCount > 0) add("${item.stepCount} 步")
+                }
+                if (metaParts.isEmpty()) {
+                    tvMeta.visibility = View.GONE
+                } else {
+                    tvMeta.text = metaParts.joinToString(" · ")
+                    tvMeta.visibility = View.VISIBLE
+                }
+
+                applyStatusPill(tvStatus, item.status)
+                row.setOnClickListener {
+                    switchToConversation(item)
+                }
+                views.containerRecentConversations.addView(row)
+            }
+        }
+    }
+
+    private fun switchToConversation(item: RecentConversationItem) {
+        quickMenuSheet?.dismiss()
+        if (item.isCurrent) {
+            Toast.makeText(this, R.string.conv_already_current, Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        closePopupSession()
+        clearPendingSwitchFallback()
+
+        val requestId = "sw_${++switchCounter}"
+        val fallbackRunnable = Runnable {
+            if (pendingSwitchRequestId == requestId) {
+                pendingSwitchRequestId = null
+                pendingSwitchFallbackRunnable = null
+                loadConversationUrlFallback(item.cascadeId, item.projectId)
+            }
+        }
+        pendingSwitchRequestId = requestId
+        pendingSwitchFallbackRunnable = fallbackRunnable
+
+        val sent = app.extensionBridge.switchConversation(requestId, item.cascadeId, item.projectId)
+        if (!sent) {
+            clearPendingSwitchFallback()
+            loadConversationUrlFallback(item.cascadeId, item.projectId)
+        } else {
+            mainHandler.postDelayed(fallbackRunnable, 1800L)
+        }
+    }
+
+    private fun handleSwitchResultFromExtension(
+        requestId: String,
+        cascadeId: String,
+        projectId: String,
+        switched: Boolean
+    ) {
+        if (requestId.isNotEmpty() && pendingSwitchRequestId != null && pendingSwitchRequestId != requestId) {
+            return
+        }
+        clearPendingSwitchFallback()
+        if (!switched) {
+            loadConversationUrlFallback(cascadeId, projectId)
+        }
+    }
+
+    private fun clearPendingSwitchFallback() {
+        pendingSwitchFallbackRunnable?.let { mainHandler.removeCallbacks(it) }
+        pendingSwitchFallbackRunnable = null
+        pendingSwitchRequestId = null
+    }
+
+    private fun loadConversationUrlFallback(cascadeId: String, projectId: String) {
+        val baseUrl = currentUrl.takeIf { UrlPolicy.isRememberableRemoteUrl(it) }
+            ?: currentSettings.lastRemoteUrl
+        val fallbackUrl = UrlPolicy.buildRemoteConversationUrl(baseUrl, cascadeId, projectId)
+        if (fallbackUrl != null) {
+            currentUrl = fallbackUrl
+            primarySession.load(
+                GeckoSession.Loader()
+                    .uri(fallbackUrl)
+                    .flags(GeckoSession.LOAD_FLAGS_REPLACE_HISTORY)
+            )
+        } else {
+            Toast.makeText(this, "请先打开远程工作区后再切换会话", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun setupBackNavigation() {
@@ -1320,7 +1598,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateExtStatusLabel(state: BridgeState) {
         val text = when {
-            state.ready -> "汉化已就绪 v${state.version ?: "1.0.3"} · 已译 ${state.translatedCount} 处"
+            state.ready -> "汉化已就绪 v${state.version ?: "1.1.0"} · 已译 ${state.translatedCount} 处"
             state.connected -> "汉化插件：已连接，初始化中..."
             else -> "汉化插件：等待端口连接..."
         }

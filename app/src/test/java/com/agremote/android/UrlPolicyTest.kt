@@ -2,6 +2,7 @@ package com.agremote.android
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -146,5 +147,20 @@ class UrlPolicyTest {
         assertEquals("resource://android/assets/i18n_zh_ext/", ExtensionBridge.EXTENSION_URI)
         assertEquals("ag-remote-zh@agremote.local", ExtensionBridge.EXTENSION_ID)
         assertEquals("ag_remote_i18n", ExtensionBridge.NATIVE_APP_NAME)
+    }
+
+    @Test
+    fun `builds fallback remote conversation urls safely`() {
+        val baseUrl = "https://antigravity.google.com/r/sample-machine-v2?p=c%2Fold-cid%3Fproject%3Dold-proj"
+        assertEquals(
+            "https://antigravity.google.com/r/sample-machine-v2?p=c%2Fnew-cid-123%3Fproject%3Dproj-alpha",
+            UrlPolicy.buildRemoteConversationUrl(baseUrl, "new-cid-123", "proj-alpha")
+        )
+        assertEquals(
+            "https://antigravity.google.com/r/sample-machine-v2?p=c%2Fnew-cid-123",
+            UrlPolicy.buildRemoteConversationUrl("https://antigravity.google.com/r/sample-machine-v2", "new-cid-123", null)
+        )
+        assertNull(UrlPolicy.buildRemoteConversationUrl("https://antigravity.google.com/", "new-cid-123", "proj-alpha"))
+        assertNull(UrlPolicy.buildRemoteConversationUrl(baseUrl, "bad/id?", "proj-alpha"))
     }
 }

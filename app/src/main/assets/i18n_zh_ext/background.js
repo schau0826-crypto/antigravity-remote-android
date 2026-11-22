@@ -2,7 +2,7 @@
   "use strict";
 
   const NATIVE_APP_ID = "ag_remote_i18n";
-  const EXT_VERSION = "1.0.3";
+  const EXT_VERSION = "1.1.0";
   const TAB_URL_PATTERNS = [
     "https://antigravity.google.com/*",
     "https://*.antigravity.google.com/*",
@@ -146,6 +146,21 @@
       await broadcastToTabs({
         type: "APP_RESUMED",
         backgroundMs
+      });
+      return;
+    }
+
+    if (msg.type === "REQUEST_SNAPSHOT") {
+      await broadcastToTabs({ type: "REQUEST_SNAPSHOT" });
+      return;
+    }
+
+    if (msg.type === "SWITCH_CONVERSATION") {
+      await broadcastToTabs({
+        type: "SWITCH_CONVERSATION",
+        requestId: String(msg.requestId || ""),
+        cascadeId: String(msg.cascadeId || ""),
+        projectId: String(msg.projectId || "")
       });
       return;
     }
@@ -333,6 +348,24 @@
         backgroundMs: Number.isFinite(Number(msg.backgroundMs))
           ? Math.max(0, Math.floor(Number(msg.backgroundMs)))
           : 0
+      });
+      return Promise.resolve({ ok: true });
+    }
+
+    if (msg.type === "SESSION_SNAPSHOT") {
+      sendToNative(msg);
+      return Promise.resolve({ ok: true });
+    }
+
+    if (msg.type === "SWITCH_RESULT") {
+      sendToNative({
+        type: "SWITCH_RESULT",
+        requestId: String(msg.requestId || ""),
+        cascadeId: String(msg.cascadeId || ""),
+        projectId: String(msg.projectId || ""),
+        switched: Boolean(msg.switched),
+        method: String(msg.method || "none"),
+        error: String(msg.error || "").slice(0, 120)
       });
       return Promise.resolve({ ok: true });
     }

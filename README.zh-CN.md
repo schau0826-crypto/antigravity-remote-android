@@ -4,7 +4,7 @@
 
 [![Platform](https://img.shields.io/badge/Android-8.0%2B%20(API%2026)-3DDC84?logo=android&logoColor=white)](https://developer.android.com/)
 [![Engine](https://img.shields.io/badge/GeckoView-160-FF7139?logo=firefox&logoColor=white)](https://mozilla.github.io/geckoview/)
-[![Extension](https://img.shields.io/badge/i18n-%E5%86%85%E7%BD%AE%E4%B8%AD%E6%96%87%E6%8F%92%E4%BB%B6%20v1.0.3-2563EB)](#2-%E5%86%85%E7%BD%AE%E4%B8%AD%E6%96%87%E6%B1%89%E5%8C%96%E6%8F%92%E4%BB%B6)
+[![Extension](https://img.shields.io/badge/i18n-%E5%86%85%E7%BD%AE%E4%B8%AD%E6%96%87%E6%8F%92%E4%BB%B6%20v1.1.0-2563EB)](#2-%E5%86%85%E7%BD%AE%E4%B8%AD%E6%96%87%E6%B1%89%E5%8C%96%E6%8F%92%E4%BB%B6)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 基于 **Mozilla GeckoView 160 + 内置 WebExtension** 打造的 Google Antigravity Remote 非官方开源安卓客户端。专为解决手机浏览器使用官方 Remote Control 网页端时的痛点而设计：免重复登录、Google 地区验证不跳出浏览器、内置无损切换的中文界面、全屏沉浸交互，以及退后台切回后运行中会话自动续流。
@@ -38,9 +38,13 @@
   - 支持 80ms / `requestAnimationFrame` 节流监听流式输出，不卡顿不闪屏。
 - **实时无损切换与热更新词典**：在悬浮菜单即可无刷新切换 **中文 / 英文原版**；支持在设置中输入自定义 JSON 键值对，通过原生消息通道（`ag_remote_i18n`）实时热生效。
 
-### 3. 沉浸式移动 UI 与单手交互
+### 3. 沉浸式移动 UI、最近会话快切与实时上下文面板
 - **状态栏与浅/深色主题自适应**：彻底去除顶部异色工具栏，页面与状态栏自动随系统浅色/深色模式切换，Web 界面占满全屏。
-- **可拖拽右侧悬浮条 + Material 3 底部快捷面板**：轻点右侧半透明悬浮条即可单手呼出快捷面板，集成 **设备列表 / 返回上页 / 同步刷新 / 中文切换 / 桌面移动 UA 切换 / 更多设置 / 清除缓存（保留登录态）**；支持按住沿右侧上下拖动并记住停靠位置。
+- **可拖拽右侧悬浮条（带四态圆点与上下文 % 角标）**：悬浮条左上角实时指示会话状态（蓝=运行中、琥珀=待确认、绿=静态就绪、红=异常），图标下方显示紧凑上下文占比百分比（达到 70%/85% 自动预警变色），支持沿右侧上下拖动并记住停靠位置。
+- **Material 3 底部快捷面板**：轻点悬浮条即可单手访问：
+  - **上下文与状态卡片**：实时展示当前模型名、四态状态徽标、上下文进度条（`已用 / 上限`、已压缩次数）及累计输入/缓存命中/输出/思考 Token 与步数明细（直读远程网页前端状态，无需改动服务端协议）；
+  - **最近活跃会话（前 5 个）快切列表**：优先排序**运行中 / 待确认**会话，展示标题、工作区名称、相对活跃时间与实时状态徽标，点按即可通过 SPA 路由无刷新直切（若路由未挂载则自动保缓存 URL 跳转）；
+  - **常用操作网格**：集成 **设备列表 / 返回上页 / 同步刷新 / 中文切换 / 桌面移动 UA 切换 / 更多设置 / 清除缓存（保留登录态）**。
 - **完整系统能力接入**：支持文件上传选择器（SAF）、Web 通知转发、屏幕常亮开关及 `https://antigravity.google.com/*` 深链直达。
 
 ### 4. 加载提速与后台断流自愈
@@ -71,7 +75,7 @@ flowchart LR
 ## 快速上手
 
 ### 方式一：直接下载 APK 安装（推荐）
-1. 前往 [**GitHub Releases**](https://github.com/schau0826-crypto/antigravity-remote-android/releases) 下载 `antigravity-remote-android-v1.0.3-arm64-v8a-debug.apk` 并安装到 Android 手机（要求 Android 8.0+，`arm64-v8a` 架构）。
+1. 前往 [**GitHub Releases**](https://github.com/schau0826-crypto/antigravity-remote-android/releases) 下载 `antigravity-remote-android-v1.1.0-arm64-v8a-debug.apk` 并安装到 Android 手机（要求 Android 8.0+，`arm64-v8a` 架构）。
 2. 在你的电脑端开启 Antigravity Remote Control：
    - **桌面端**：打开 **Antigravity Desktop** → 进入设置开启 **Remote Control**；
    - **命令行**：在终端执行：
@@ -109,7 +113,7 @@ sdk.dir=/path/to/your/Android/sdk
 ### 2. 运行单测与构建命令
 
 ```bash
-# 运行内置 WebExtension JS 单元测试（23 项）
+# 运行内置 WebExtension JS 单元测试（29 项）
 node --test tests/i18n.test.mjs
 
 # 运行 Android JVM 单元测试并构建 arm64-v8a Debug APK

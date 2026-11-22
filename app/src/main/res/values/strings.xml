@@ -17,6 +17,15 @@
     <string name="popup_close">关闭</string>
     <string name="sheet_title">Antigravity 远程</string>
     <string name="sheet_clear_cache">清除网页缓存并刷新</string>
+    <string name="sheet_recent_title">最近活跃会话</string>
+    <string name="sheet_recent_hint">运行中优先 · 点按直切</string>
+    <string name="sheet_recent_empty">连接远程设备后自动显示最近 5 个活跃会话</string>
+    <string name="status_running">● 运行中</string>
+    <string name="status_waiting">● 待确认</string>
+    <string name="status_idle">静态</string>
+    <string name="status_error">● 异常</string>
+    <string name="conv_current_prefix">当前</string>
+    <string name="conv_already_current">已在当前会话</string>
     <string name="settings_title">Antigravity Remote 设置</string>
     <string name="settings_save">保存并应用</string>
     <string name="settings_cancel">取消</string>

@@ -18,6 +18,7 @@ data class BridgeState(
 class ExtensionBridge {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val listeners = CopyOnWriteArraySet<(BridgeState) -> Unit>()
+    private val snapshotListeners = CopyOnWriteArraySet<(SessionSnapshot) -> Unit>()
 
     @Volatile
     private var activePort: WebExtension.Port? = null
@@ -33,7 +34,14 @@ class ExtensionBridge {
         private set
 
     @Volatile
+    var latestSnapshot: SessionSnapshot = SessionSnapshot()
+        private set
+
+    @Volatile
     var onStreamStalledListener: ((hasDraft: Boolean, backgroundMs: Long) -> Unit)? = null
+
+    @Volatile
+    var onSwitchResultListener: ((requestId: String, cascadeId: String, projectId: String, switched: Boolean) -> Unit)? = null
 
     fun addListener(listener: (BridgeState) -> Unit) {
         listeners.add(listener)
@@ -42,6 +50,15 @@ class ExtensionBridge {
 
     fun removeListener(listener: (BridgeState) -> Unit) {
         listeners.remove(listener)
+    }
+
+    fun addSnapshotListener(listener: (SessionSnapshot) -> Unit) {
+        snapshotListeners.add(listener)
+        mainHandler.post { listener(latestSnapshot) }
+    }
+
+    fun removeSnapshotListener(listener: (SessionSnapshot) -> Unit) {
+        snapshotListeners.remove(listener)
     }
 
     fun attachExtension(extension: WebExtension) {
@@ -97,6 +114,38 @@ class ExtensionBridge {
         }
     }
 
+    fun requestSessionSnapshot() {
+        mainHandler.post {
+            val port = activePort ?: return@post
+            try {
+                port.postMessage(JSONObject().apply { put("type", "REQUEST_SNAPSHOT") })
+            } catch (t: Throwable) {
+                Log.w(TAG, "Failed to post REQUEST_SNAPSHOT to native port", t)
+            }
+        }
+    }
+
+    fun switchConversation(requestId: String, cascadeId: String, projectId: String): Boolean {
+        val port = activePort ?: return false
+        mainHandler.post {
+            val currentPort = activePort ?: port
+            try {
+                val payload = JSONObject().apply {
+                    put("type", "SWITCH_CONVERSATION")
+                    put("requestId", requestId)
+                    put("cascadeId", cascadeId)
+                    put("projectId", projectId)
+                }
+                currentPort.postMessage(payload)
+                Log.i(TAG, "Sent SWITCH_CONVERSATION requestId=$requestId")
+            } catch (t: Throwable) {
+                Log.w(TAG, "Failed to post SWITCH_CONVERSATION to native port", t)
+                onSwitchResultListener?.invoke(requestId, cascadeId, projectId, false)
+            }
+        }
+        return true
+    }
+
     private fun buildConfigPayload(): JSONObject {
         val dictJson = JSONObject()
         for ((key, value) in currentCustomDict) {
@@ -118,7 +167,7 @@ class ExtensionBridge {
 
         when (json.optString("type")) {
             "READY" -> {
-                val version = json.optString("version", "1.0.3").ifBlank { "1.0.3" }
+                val version = json.optString("version", "1.1.0").ifBlank { "1.1.0" }
                 Log.i(TAG, "WebExtension READY version=$version")
                 updateState { it.copy(connected = true, ready = true, version = version) }
                 if (replyPort != null) {
@@ -140,6 +189,45 @@ class ExtensionBridge {
                 Log.i(TAG, "WebExtension STREAM_STALLED hasDraft=$hasDraft backgroundMs=$backgroundMs")
                 mainHandler.post {
                     onStreamStalledListener?.invoke(hasDraft, backgroundMs)
+                }
+            }
+            "SESSION_SNAPSHOT" -> {
+                val parsed = SessionTelemetryParser.parseSnapshot(json)
+                val previousRecents = latestSnapshot.recentConversations
+                val mergedRecents = if (parsed.recentConversations.isEmpty() && previousRecents.isNotEmpty()) {
+                    val cid = parsed.currentConversationId
+                    previousRecents.map { item ->
+                        item.copy(isCurrent = cid.isNotEmpty() && item.cascadeId == cid)
+                    }
+                } else {
+                    parsed.recentConversations
+                }
+                val merged = parsed.copy(recentConversations = mergedRecents)
+                latestSnapshot = merged
+                val meta = json.optJSONObject("probeMeta")
+                Log.i(
+                    TAG,
+                    "WebExtension SESSION_SNAPSHOT recents=${merged.recentConversations.size} hasCtx=${merged.context != null} pct=${merged.context?.contextPct} status=${merged.context?.status} store=${meta?.optBoolean("hasStore")} router=${meta?.optBoolean("hasRouter")} asp=${meta?.optBoolean("hasAsp")} summaries=${meta?.optInt("summaryCount")}"
+                )
+                mainHandler.post {
+                    for (listener in snapshotListeners) {
+                        listener(merged)
+                    }
+                }
+            }
+            "SWITCH_RESULT" -> {
+                val requestId = json.optString("requestId", "")
+                val cascadeId = json.optString("cascadeId", "")
+                val projectId = json.optString("projectId", "")
+                val switched = json.optBoolean("switched", false)
+                val err = json.optString("error", "")
+                val errSuffix = if (err.isNotEmpty()) " err=$err" else ""
+                Log.i(
+                    TAG,
+                    "WebExtension SWITCH_RESULT requestId=$requestId switched=$switched method=${json.optString("method")}$errSuffix"
+                )
+                mainHandler.post {
+                    onSwitchResultListener?.invoke(requestId, cascadeId, projectId, switched)
                 }
             }
         }

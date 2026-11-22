@@ -1,6 +1,8 @@
 package com.agremote.android
 
 import java.net.URI
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import java.util.Locale
 
 enum class UrlAction {
@@ -99,6 +101,37 @@ object UrlPolicy {
         }
         return path.startsWith("/r/") && path.length > 3
     }
+
+    fun buildRemoteConversationUrl(
+        baseRemoteUrl: String?,
+        cascadeId: String,
+        projectId: String? = null
+    ): String? {
+        if (!isRememberableRemoteUrl(baseRemoteUrl)) return null
+        val cid = cascadeId.trim()
+        if (!CASCADE_ID_REGEX.matches(cid)) return null
+
+        val parsed = try {
+            URI(baseRemoteUrl!!.trim())
+        } catch (_: Exception) {
+            return null
+        }
+        val scheme = parsed.scheme ?: return null
+        val authority = parsed.rawAuthority ?: return null
+        val path = parsed.rawPath ?: return null
+        if (!path.startsWith("/r/") || path.length <= 3) return null
+
+        val proj = projectId?.trim().orEmpty()
+        val innerTarget = if (proj.isNotEmpty()) {
+            "c/$cid?project=${URLEncoder.encode(proj, StandardCharsets.UTF_8.name())}"
+        } else {
+            "c/$cid"
+        }
+        val encodedInner = URLEncoder.encode(innerTarget, StandardCharsets.UTF_8.name())
+        return "$scheme://$authority$path?p=$encodedInner"
+    }
+
+    private val CASCADE_ID_REGEX = Regex("^[0-9a-zA-Z_-]{6,128}$")
 
     fun isAllowedHost(rawHost: String?): Boolean {
         val host = rawHost

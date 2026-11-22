@@ -4,7 +4,7 @@ English | [简体中文](README.zh-CN.md)
 
 [![Platform](https://img.shields.io/badge/Android-8.0%2B%20(API%2026)-3DDC84?logo=android&logoColor=white)](https://developer.android.com/)
 [![Engine](https://img.shields.io/badge/GeckoView-160-FF7139?logo=firefox&logoColor=white)](https://mozilla.github.io/geckoview/)
-[![Extension](https://img.shields.io/badge/i18n-Built--in%20%E4%B8%AD%E6%96%87%20v1.0.3-2563EB)](#built-in-chinese-localization-plugin)
+[![Extension](https://img.shields.io/badge/i18n-Built--in%20%E4%B8%AD%E6%96%87%20v1.1.0-2563EB)](#built-in-chinese-localization-plugin)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 An unofficial, open-source Android client for **Google Antigravity Remote Control**, built on **Mozilla GeckoView 160** and a bundled **WebExtension** (`ag-remote-zh@agremote.local`). It solves the everyday pain points of using the official mobile web dashboard—persistent sign-in, OAuth redirect handling, built-in Simplified Chinese UI localization, full-screen ergonomics, and background-resume stream recovery.
@@ -37,9 +37,13 @@ An unofficial, open-source Android client for **Google Antigravity Remote Contro
   - Protects AI/user conversation prose so only buttons, menus, approval actions, timestamps, and status indicators are localized.
 - **Live Lossless Toggle & Custom JSON Dictionary**: Switch between **中文** and **English** instantly without reloading, or add custom JSON overrides in Settings for real-time hot updates via native messaging (`ag_remote_i18n`).
 
-### 3. Immersive Mobile UI & Ergonomics
+### 3. Immersive Mobile UI, Recent Switcher & Live Context Telemetry
 - **Adaptive Light & Dark System Bars**: Automatically matches your phone's light/dark theme with zero clashing top bars.
-- **Draggable Right-Edge Floating Handle**: Tap to open a clean Material 3 bottom sheet with one-thumb access to **Devices List**, **Back**, **Sync/Reload**, **中文 / EN**, **Desktop / Mobile UA**, **Settings**, and **Clear Cache** (preserving login cookies). Drag vertically to dock anywhere along the right edge.
+- **Draggable Right-Edge Floating Handle with Live LED & Context %**: Displays a 4-state live dot (running / waiting / error / idle) and compact context usage `%` badge right on the floating pill; drag vertically to dock anywhere along the right edge.
+- **One-Thumb BottomSheet with Context Card & Top-5 Recent Switcher**:
+  - **Context & Telemetry Card**: Shows the active model, 4-state status badge, context window progress bar (`used / limit`, compaction count), and cumulative token/cache breakdown (`input`, `cache hit %`, `output`, `thinking`, `steps`) read directly from the live remote web session (`session_probe.js`).
+  - **Recent Active Conversations (Top 5)**: Prioritizes `Running` and `Waiting` sessions ahead of recent idle threads with workspace & relative-time metadata; tap any row for instant in-app SPA route switching (with cache-preserving URL fallback).
+  - **Quick Controls**: **Devices List**, **Back**, **Sync/Reload**, **中文 / EN**, **Desktop / Mobile UA**, **Settings**, and **Clear Cache** (preserving login cookies).
 - **Native System Integration**: Supports Android file picker uploads (`PromptDelegate`), Web Notifications forwarding, keep-screen-on toggle, and `https://antigravity.google.com/*` deep links.
 
 ### 4. Speed & Background Stream Recovery
@@ -67,7 +71,7 @@ flowchart LR
 ## Quick Start
 
 ### Option A: Install Prebuilt APK (Recommended)
-1. Download `antigravity-remote-android-v1.0.3-arm64-v8a-debug.apk` from [**GitHub Releases**](https://github.com/schau0826-crypto/antigravity-remote-android/releases) and install it on your Android phone (Android 8.0+, `arm64-v8a`).
+1. Download `antigravity-remote-android-v1.1.0-arm64-v8a-debug.apk` from [**GitHub Releases**](https://github.com/schau0826-crypto/antigravity-remote-android/releases) and install it on your Android phone (Android 8.0+, `arm64-v8a`).
 2. On your computer, enable Antigravity Remote Control:
    - **Desktop App**: Open **Antigravity Desktop** → **Settings** → enable **Remote Control**, or
    - **CLI**: Run:
@@ -107,7 +111,7 @@ sdk.dir=/path/to/your/Android/sdk
 ### 2. Run Tests & Build APK
 
 ```bash
-# Run WebExtension JS unit tests (23 tests)
+# Run WebExtension JS unit tests (29 tests)
 node --test tests/i18n.test.mjs
 
 # Run Android JVM unit tests & build arm64-v8a Debug APK

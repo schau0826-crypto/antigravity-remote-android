@@ -248,7 +248,7 @@ test("manifest.json follows MV2 GeckoView built-in WebExtension contract", () =>
   const manifest = JSON.parse(manifestRaw);
 
   assert.equal(manifest.manifest_version, 2);
-  assert.equal(manifest.version, "1.0.3");
+  assert.equal(manifest.version, "1.1.0");
   assert.equal(manifest.browser_specific_settings?.gecko?.id, "ag-remote-zh@agremote.local");
 
   for (const perm of [
@@ -283,7 +283,7 @@ test("manifest.json follows MV2 GeckoView built-in WebExtension contract", () =>
   assert.ok(cs.matches.includes("https://*.antigravity.google/*"));
   assert.ok(cs.matches.includes("https://antigravity.static.usercontent.goog/*"));
   assert.ok(cs.matches.includes("https://*.usercontent.goog/*"));
-  assert.deepEqual(cs.js, ["dict_zh.js", "translator.js", "content.js"]);
+  assert.deepEqual(cs.js, ["dict_zh.js", "translator.js", "session_probe.js", "content.js"]);
   assert.deepEqual(cs.css, ["mobile_polish.css"]);
   assert.equal(cs.run_at, "document_idle");
   assert.equal(cs.all_frames, true);
@@ -876,7 +876,7 @@ test("background.js and content.js wire native port READY, CONFIG_UPDATE, and ST
   vm.runInContext(bgSource, bgCtx);
 
   assert.equal(connectedAppId, "ag_remote_i18n");
-  assert.deepEqual(nativeMessagesSent[0], { type: "READY", version: "1.0.3" });
+  assert.deepEqual(nativeMessagesSent[0], { type: "READY", version: "1.1.0" });
 
   // Simulate Android -> Extension CONFIG_UPDATE
   for (const fn of portMessageListeners) {
@@ -1406,4 +1406,601 @@ test("translator.js avoids getComputedStyle on non-matching & multi-word nodes w
     1,
     `Expected getComputedStyle only for lowercase ligature candidate, got ${computedStyleCalls} calls`
   );
+});
+
+// ---------------------------------------------------------------------------
+// 12. Session Probe & Quick Conversation Switcher Tests (v1.1.0)
+// ---------------------------------------------------------------------------
+test("session_probe.js loads cleanly as plain script and filters/prioritizes recent active conversations", () => {
+  const probeSource = fs.readFileSync(path.join(EXT_DIR, "session_probe.js"), "utf8");
+  const probeSandbox = {
+    globalThis: null,
+    Object, Array, String, Number, Boolean, RegExp, Map, Set, Math, Date, BigInt
+  };
+  probeSandbox.globalThis = probeSandbox;
+  vm.createContext(probeSandbox);
+  vm.runInContext(probeSource, probeSandbox);
+  const probe = probeSandbox.AG_SESSION_PROBE;
+  assert.ok(probe, "AG_SESSION_PROBE should attach cleanly");
+
+  const reduxState = {
+    trajectorySummaries: {
+      summaries: {
+        "cid-archived": {
+          summary: "Archived Old",
+          status: 1,
+          annotations: { archived: true },
+          lastModifiedTime: { seconds: 9999999n }
+        },
+        "cid-subagent": {
+          summary: "Subagent Worker",
+          status: 2,
+          trajectoryMetadata: { parentConversationId: "cid-idle-1" },
+          lastModifiedTime: { seconds: 9999998n }
+        },
+        "cid-battle-fork": {
+          summary: "Battle Arm",
+          status: 1,
+          trajectoryMetadata: { isBattleModeFork: true },
+          lastModifiedTime: { seconds: 9999997n }
+        },
+        "cid-hidden": {
+          summary: "Hidden Tool",
+          status: 1,
+          trajectoryMetadata: { sourceMetadata: { hideFromConversationList: true } },
+          lastModifiedTime: { seconds: 9999996n }
+        },
+        "cid-side-q": {
+          summary: "Side Question",
+          status: 1,
+          trajectoryType: 22,
+          lastModifiedTime: { seconds: 9999995n }
+        },
+        "cid-commit-msg": {
+          summary: "Commit Message Helper",
+          status: 1,
+          trajectoryType: 23,
+          lastModifiedTime: { seconds: 9999994n }
+        },
+        "cid-idle-old": {
+          summary: "Old Idle Chat",
+          status: 1,
+          stepCount: 5,
+          lastModifiedTime: { seconds: 1000n }
+        },
+        "cid-idle-mid": {
+          summary: "Mid Idle Chat",
+          status: 1,
+          trajectoryType: 17,
+          stepCount: 12,
+          workspaces: [{ workspaceFolderAbsoluteUri: "file:///tmp/demo-repo-a" }],
+          lastModifiedTime: { seconds: 2000n }
+        },
+        "cid-idle-new": {
+          summary: "Newest Idle Chat",
+          status: 1,
+          trajectoryType: 4,
+          stepCount: 18,
+          workspaces: [{ workspaceFolderAbsoluteUri: "file:///tmp/antigravity-remote-android" }],
+          trajectoryMetadata: { projectId: "proj-1" },
+          lastModifiedTime: { seconds: 5000n }
+        },
+        "cid-running-1": {
+          summary: "Running Build Task",
+          status: 2,
+          trajectoryType: 4,
+          stepCount: 31,
+          workspaces: [{ workspaceFolderAbsoluteUri: "file:///tmp/workspace-alpha" }],
+          lastModifiedTime: { seconds: 1500n }
+        },
+        "cid-waiting-1": {
+          summary: "Approval Pending",
+          status: 1,
+          waitingSteps: [{ stepIndex: 4 }],
+          stepCount: 9,
+          lastModifiedTime: { seconds: 1200n }
+        }
+      },
+      externalSummaries: {
+        "cid-idle-ext": {
+          summary: "External Idle",
+          status: 1,
+          lastModifiedTime: { seconds: 3500n }
+        }
+      }
+    }
+  };
+
+  const recent = probe.extractRecentConversations(reduxState, makeDoc(), "cid-running-1", 5);
+  assert.equal(recent.length, 5);
+  // Active running/waiting items must rank ahead of newer idle items
+  assert.equal(recent[0].cascadeId, "cid-running-1");
+  assert.equal(recent[0].status, "running");
+  assert.equal(recent[0].isCurrent, true);
+  assert.equal(recent[0].workspaceName, "workspace-alpha");
+
+  assert.equal(recent[1].cascadeId, "cid-waiting-1");
+  assert.equal(recent[1].status, "waiting");
+
+  assert.equal(recent[2].cascadeId, "cid-idle-new");
+  assert.equal(recent[2].status, "idle");
+  assert.equal(recent[2].projectId, "proj-1");
+  assert.equal(recent[2].workspaceName, "antigravity-remote-android");
+  assert.equal(recent[2].lastActiveMs, 5000000);
+
+  assert.equal(recent[3].cascadeId, "cid-idle-ext");
+  assert.equal(recent[4].cascadeId, "cid-idle-mid");
+
+  const killedCheck = probe.extractRecentConversations(
+    {
+      trajectorySummaries: {
+        summaries: {
+          "cid-killed": {
+            summary: "Killed Run",
+            status: 2,
+            killed: true,
+            trajectoryType: 4,
+            lastModifiedTime: { seconds: 6000n }
+          }
+        }
+      }
+    },
+    makeDoc(),
+    "",
+    5
+  );
+  assert.equal(killedCheck.length, 1);
+  assert.equal(killedCheck[0].status, "idle");
+});
+
+test("session_probe.js extracts contextWindowUsage, costSummary, compacted count, and 4-state status", () => {
+  const probe = require(path.join(EXT_DIR, "session_probe.js"));
+
+  const reduxState = {
+    trajectorySummaries: {
+      summaries: {
+        "cid-1": { summary: "Context Demo", status: 2, stepCount: 44, waitingSteps: [] },
+        "cid-wait": { summary: "Waiting Demo", status: 1, waitingSteps: [{ stepIndex: 3 }] }
+      }
+    },
+    modelSelection: {
+      byConversation: {
+        "cid-1": { customLabel: "Claude Sonnet 4.6", contextWindow: 200000 }
+      }
+    }
+  };
+
+  const aspRunning = {
+    status: 2,
+    contextWindowUsage: {
+      estimatedTokensUsed: 84000n,
+      maxContextTokens: 200000n
+    },
+    costSummary: {
+      total: {
+        cumulativeTotal: {
+          input: { tokens: 12000n },
+          cacheRead: { tokens: 88000n },
+          output: { tokens: 3200n },
+          thinking: { tokens: 1100n },
+          generationCount: 6,
+          pricing: { modelName: "Gemini 3.1 Pro" }
+        }
+      }
+    },
+    compactedAtStepIndices: [12, 28],
+    hasActiveChildren: true,
+    backgroundCommands: [{ pid: 1 }, { pid: 2 }],
+    trajectorySlice: { totalStepsLength: 48 }
+  };
+
+  const runningCtx = probe.extractContextTelemetry(aspRunning, reduxState, makeDoc(), "cid-1", { onLine: true });
+  assert.equal(runningCtx.status, "running");
+  assert.equal(runningCtx.modelName, "Gemini 3.1 Pro");
+  assert.equal(runningCtx.usedTokens, 84000);
+  assert.equal(runningCtx.maxTokens, 200000);
+  assert.equal(runningCtx.contextPct, 42);
+  assert.equal(runningCtx.inputTokens, 12000);
+  assert.equal(runningCtx.cacheReadTokens, 88000);
+  assert.equal(runningCtx.cacheHitPct, 88);
+  assert.equal(runningCtx.outputTokens, 3200);
+  assert.equal(runningCtx.thinkingTokens, 1100);
+  assert.equal(runningCtx.compactedCount, 2);
+  assert.equal(runningCtx.stepCount, 48);
+  assert.equal(runningCtx.activeSubagents, true);
+  assert.equal(runningCtx.backgroundCmdCount, 2);
+
+  // Fallback when contextWindowUsage is missing -> derives from turnCosts & modelSelection
+  const aspFallback = {
+    status: 1,
+    costSummary: {
+      turnCosts: {
+        t1: { turn: { input: { tokens: 10000n }, cacheRead: { tokens: 50000n } } }
+      }
+    },
+    trajectorySlice: { lastStepError: { isBenign: false, shortError: "Rate limited" } }
+  };
+  const errCtx = probe.extractContextTelemetry(aspFallback, reduxState, makeDoc(), "cid-1", { onLine: true });
+  assert.equal(errCtx.status, "error");
+  assert.equal(errCtx.errorMessage, "Rate limited");
+  assert.equal(errCtx.usedTokens, 60000);
+  assert.equal(errCtx.maxTokens, 200000);
+  assert.equal(errCtx.contextPct, 30);
+  assert.equal(errCtx.modelName, "Claude Sonnet 4.6");
+
+  // Waiting state
+  const waitCtx = probe.extractContextTelemetry({ status: 1 }, reduxState, makeDoc(), "cid-wait", { onLine: true });
+  assert.equal(waitCtx.status, "waiting");
+
+  // Idle state
+  const idleCtx = probe.extractContextTelemetry({ status: 1 }, { trajectorySummaries: { summaries: {} } }, makeDoc(), "cid-idle", { onLine: true });
+  assert.equal(idleCtx.status, "idle");
+});
+
+test("session_probe.js discovers Fiber providers via wrappedJSObject and switches via router + cloneInto or DOM fallback", () => {
+  const probe = require(path.join(EXT_DIR, "session_probe.js"));
+
+  const navCalls = [];
+  const clonedObjects = [];
+  const cloneTargets = [];
+  const fakePageWin = { name: "page-window" };
+  const fakeStore = {
+    getState() {
+      return {
+        trajectorySummaries: {
+          summaries: {
+            "cid-a": { summary: "Session A", status: 1, lastModifiedTime: { seconds: 100 } },
+            "cid-b": { summary: "Session B", status: 2, trajectoryMetadata: { projectId: "proj-b" }, lastModifiedTime: { seconds: 200 } }
+          }
+        }
+      };
+    }
+  };
+  const fakeRouter = {
+    state: {
+      location: {
+        pathname: "/c/cid-a",
+        search: { project: "proj-a", focused: "step-1", hostThemePalette: [1, "", ""] }
+      }
+    },
+    navigate(opts) {
+      navCalls.push(opts);
+    }
+  };
+  const fakeTrajCtx = {
+    subscribe() { return () => {}; },
+    peek(cid) {
+      return cid === "cid-a"
+        ? {
+            getState() {
+              return {
+                status: 1,
+                contextWindowUsage: { estimatedTokensUsed: 40000, maxContextTokens: 200000 }
+              };
+            }
+          }
+        : null;
+    }
+  };
+
+  const leafFiber = { memoizedProps: { value: fakeTrajCtx }, child: null, sibling: null };
+  const routerFiber = { memoizedProps: { value: fakeRouter }, child: leafFiber, sibling: null };
+  const rootFiber = { memoizedProps: { value: { store: fakeStore } }, child: routerFiber, sibling: null };
+
+  const rootDiv = h("div", { id: "root" });
+  const rawRoot = { __reactFiber$test123: rootFiber };
+  rootDiv.wrappedJSObject = rawRoot;
+
+  const doc = makeDoc(rootDiv);
+  doc.getElementById = (id) => (id === "root" ? rootDiv : null);
+
+  const scope = {
+    wrappedJSObject: fakePageWin,
+    location: { pathname: "/c/cid-a" },
+    navigator: { onLine: true },
+    cloneInto(obj, target) {
+      clonedObjects.push(obj);
+      cloneTargets.push(target);
+      return JSON.parse(JSON.stringify(obj));
+    }
+  };
+
+  const snap = probe.collectSnapshot(doc, scope);
+  assert.equal(snap.currentConversationId, "cid-a");
+  assert.equal(snap.context.contextPct, 20);
+  assert.equal(snap.recentConversations[0].cascadeId, "cid-b");
+  assert.equal(snap.recentConversations[0].status, "running");
+
+  const swRes = probe.switchConversation(doc, scope, "cid-b", "proj-b");
+  assert.deepEqual(swRes, { switched: true, method: "router" });
+  assert.equal(clonedObjects.length, 1);
+  assert.equal(cloneTargets[0], fakePageWin);
+  assert.equal(navCalls.length, 1);
+  assert.equal(navCalls[0].to, "/c/$cascadeId");
+  assert.deepEqual(navCalls[0].params, { cascadeId: "cid-b" });
+  assert.deepEqual(navCalls[0].search, { project: "proj-b", hostThemePalette: [1, "", ""] });
+
+  // DOM click fallback when no router is mounted
+  let clicked = false;
+  const fallbackRow = h("div", { "data-testid": "conversation-row-sidebar", "data-cascade-id": "cid-dom" }, "DOM Row");
+  fallbackRow.click = () => { clicked = true; };
+  const domOnlyDoc = makeDoc(fallbackRow);
+  domOnlyDoc.querySelectorAll = (sel) => (sel.includes("conversation-row-") ? [fallbackRow] : []);
+  const domRes = probe.switchConversation(domOnlyDoc, { navigator: {} }, "cid-dom", "");
+  assert.deepEqual(domRes, { switched: true, method: "dom_click" });
+  assert.equal(clicked, true);
+});
+
+test("background.js and content.js relay REQUEST_SNAPSHOT -> SESSION_SNAPSHOT and SWITCH_CONVERSATION -> SWITCH_RESULT", async () => {
+  const bgSource = fs.readFileSync(path.join(EXT_DIR, "background.js"), "utf8");
+  const probeSource = fs.readFileSync(path.join(EXT_DIR, "session_probe.js"), "utf8");
+  const contentSource = fs.readFileSync(path.join(EXT_DIR, "content.js"), "utf8");
+
+  const nativeMessagesSent = [];
+  const portMessageListeners = [];
+  const bgRuntimeListeners = [];
+  const contentRuntimeListeners = [];
+
+  const mockPort = {
+    postMessage(msg) { nativeMessagesSent.push(JSON.parse(JSON.stringify(msg))); },
+    onMessage: { addListener: (fn) => portMessageListeners.push(fn) },
+    onDisconnect: { addListener() {} },
+    disconnect() {}
+  };
+
+  const bgBrowser = {
+    runtime: {
+      connectNative: () => mockPort,
+      onMessage: { addListener: (fn) => bgRuntimeListeners.push(fn) }
+    },
+    storage: {
+      local: { async get() { return { enabled: true, customDict: {} }; }, async set() {} }
+    },
+    tabs: {
+      async query() { return [{ id: 7, url: "https://antigravity.google.com/r/m1" }]; },
+      async sendMessage(_tabId, payload) {
+        for (const fn of contentRuntimeListeners) fn(payload);
+      },
+      onRemoved: { addListener() {} }
+    }
+  };
+
+  const bgCtx = {
+    browser: bgBrowser,
+    Map, Object, Array, String, Number, Boolean, Promise, JSON, Math, setTimeout, clearTimeout
+  };
+  vm.createContext(bgCtx);
+  vm.runInContext(bgSource, bgCtx);
+
+  const probeSandbox = {
+    globalThis: null,
+    Object, Array, String, Number, Boolean, RegExp, Map, Set, Math, Date, BigInt, Promise, JSON, setTimeout, clearTimeout
+  };
+  probeSandbox.globalThis = probeSandbox;
+  vm.createContext(probeSandbox);
+  vm.runInContext(probeSource, probeSandbox);
+
+  let switchedArgs = null;
+  const fakeRouter = {
+    state: { location: { pathname: "/c/cid-cur", search: {} } },
+    navigate(opts) {
+      switchedArgs = opts;
+      fakeRouter.state.location.pathname = "/c/" + opts.params.cascadeId;
+      return Promise.resolve();
+    }
+  };
+  const fakeStore = {
+    getState() {
+      return {
+        trajectorySummaries: {
+          summaries: {
+            "cid-cur": { summary: "Current", status: 1, lastModifiedTime: { seconds: 100 } },
+            "cid-next": { summary: "Next Task", status: 2, trajectoryMetadata: { projectId: "p-2" }, lastModifiedTime: { seconds: 300 } }
+          }
+        }
+      };
+    }
+  };
+  const fakeTrajCtx = {
+    subscribe() { return () => {}; },
+    peek() {
+      return { getState: () => ({ status: 1, contextWindowUsage: { estimatedTokensUsed: 50000, maxContextTokens: 200000 } }) };
+    }
+  };
+
+  const rootDiv = h("div", { id: "root" });
+  rootDiv.__reactFiber$x = {
+    memoizedProps: { value: { store: fakeStore } },
+    child: {
+      memoizedProps: { value: fakeRouter },
+      child: { memoizedProps: { value: fakeTrajCtx }, child: null, sibling: null },
+      sibling: null
+    },
+    sibling: null
+  };
+  const doc = makeDoc(rootDiv);
+  doc.getElementById = (id) => (id === "root" ? rootDiv : null);
+
+  const contentBrowser = {
+    runtime: {
+      async sendMessage(msg) {
+        for (const fn of bgRuntimeListeners) {
+          const r = fn(msg, { tab: { id: 7 }, frameId: 2 });
+          if (r && typeof r.then === "function") return await r;
+        }
+        return undefined;
+      },
+      onMessage: { addListener: (fn) => contentRuntimeListeners.push(fn) }
+    },
+    storage: { local: bgBrowser.storage.local, onChanged: { addListener() {} } }
+  };
+
+  const contentCtx = {
+    globalThis: null,
+    AG_I18N_DICT: dictZh,
+    AG_I18N_TRANSLATOR: translatorLib,
+    AG_SESSION_PROBE: probeSandbox.AG_SESSION_PROBE,
+    document: doc,
+    browser: contentBrowser,
+    location: { href: "https://antigravity.static.usercontent.goog/web/2.34.0/c/cid-cur", pathname: "/web/2.34.0/c/cid-cur" },
+    navigator: { onLine: true },
+    MutationObserver: createMockMutationObserverClass(),
+    Object, Array, String, Number, Boolean, Promise, Date, Math,
+    setTimeout: (fn, ms) => setTimeout(fn, Math.min(ms, 20)),
+    clearTimeout
+  };
+  contentCtx.globalThis = contentCtx;
+  vm.createContext(contentCtx);
+  vm.runInContext(contentSource, contentCtx);
+
+  await new Promise((r) => setTimeout(r, 30));
+  nativeMessagesSent.length = 0;
+
+  for (const fn of portMessageListeners) {
+    fn({ type: "REQUEST_SNAPSHOT" });
+  }
+  await new Promise((r) => setTimeout(r, 20));
+  const snapMsg = nativeMessagesSent.find((m) => m.type === "SESSION_SNAPSHOT");
+  assert.ok(snapMsg, "Expected SESSION_SNAPSHOT after REQUEST_SNAPSHOT");
+  assert.equal(snapMsg.currentConversationId, "cid-cur");
+  assert.equal(snapMsg.context.contextPct, 25);
+  assert.equal(snapMsg.recentConversations.length, 2);
+
+  nativeMessagesSent.length = 0;
+  for (const fn of portMessageListeners) {
+    fn({ type: "SWITCH_CONVERSATION", requestId: "sw_9", cascadeId: "cid-next", projectId: "p-2" });
+  }
+  await new Promise((r) => setTimeout(r, 20));
+  const swMsg = nativeMessagesSent.find((m) => m.type === "SWITCH_RESULT");
+  assert.ok(swMsg, "Expected SWITCH_RESULT after SWITCH_CONVERSATION");
+  assert.equal(swMsg.requestId, "sw_9");
+  assert.equal(swMsg.switched, true);
+  assert.equal(switchedArgs?.params?.cascadeId, "cid-next");
+});
+
+test("session_probe.js discovers providers inside active conversation via React 18/19 __reactContainer$ and upward .return climb without list DOM", () => {
+  const probe = require(path.join(EXT_DIR, "session_probe.js"));
+
+  const fakeStore = {
+    getState() {
+      return {
+        trajectorySummaries: {
+          summaries: {
+            "cid-active": { summary: "Active Conversation", status: 2, lastModifiedTime: { seconds: 300 } },
+            "cid-other": { summary: "Other Recent Chat", status: 1, lastModifiedTime: { seconds: 200 } }
+          }
+        }
+      };
+    }
+  };
+  const fakeRouter = {
+    state: { location: { pathname: "/c/cid-active", search: {} } },
+    navigate() {}
+  };
+  const fakeTrajCtx = {
+    subscribe() { return () => {}; },
+    peek(cid) {
+      return cid === "cid-active"
+        ? { getState: () => ({ status: 2, contextWindowUsage: { estimatedTokensUsed: 90000, maxContextTokens: 200000 } }) }
+        : null;
+    }
+  };
+
+  // Simulate React 18/19: #root uses __reactContainer$ (HostRoot -> Provider ancestors), and deep conversation-view has __reactFiber$ with .return chain
+  const storeFiber = { memoizedProps: { value: { store: fakeStore } }, child: null, sibling: null, return: null };
+  const routerFiber = { memoizedProps: { value: fakeRouter }, child: null, sibling: null, return: storeFiber };
+  const trajFiber = { memoizedProps: { value: fakeTrajCtx }, child: null, sibling: null, return: routerFiber };
+  const convFiber = { memoizedProps: {}, child: null, sibling: null, return: trajFiber };
+  storeFiber.child = routerFiber;
+  routerFiber.child = trajFiber;
+  trajFiber.child = convFiber;
+
+  const rootDiv = h("div", { id: "root" });
+  rootDiv.wrappedJSObject = {
+    __reactContainer$r19: { current: storeFiber }
+  };
+
+  const convView = h("div", { "data-testid": "conversation-view", "data-cascade-id": "cid-active" });
+  convView.wrappedJSObject = { __reactFiber$conv1: convFiber };
+  rootDiv.appendChild(convView);
+
+  const doc = makeDoc(rootDiv);
+  doc.getElementById = (id) => (id === "root" ? rootDiv : null);
+  doc.querySelector = (sel) => (sel.includes("conversation-view") ? convView : null);
+  doc.querySelectorAll = () => []; // Zero list rows in DOM!
+
+  const snap = probe.collectSnapshot(doc, { location: { pathname: "/c/cid-active" }, navigator: { onLine: true } });
+  assert.equal(snap.probeMeta.hasStore, true);
+  assert.equal(snap.probeMeta.hasRouter, true);
+  assert.equal(snap.probeMeta.hasAsp, true);
+  assert.equal(snap.probeMeta.summaryCount, 2);
+  assert.equal(snap.recentConversations.length, 2);
+  assert.equal(snap.recentConversations[0].cascadeId, "cid-active");
+  assert.equal(snap.recentConversations[1].cascadeId, "cid-other");
+  assert.equal(snap.context.contextPct, 45);
+});
+
+test("session_probe.js switchConversationAsync verifies async router.navigate resolution, rejection, and no-op fallback", async () => {
+  const probe = require(path.join(EXT_DIR, "session_probe.js"));
+
+  function makeRouterDoc(routerObj) {
+    const rootDiv = h("div", { id: "root" });
+    rootDiv.wrappedJSObject = {
+      __reactFiber$sw: {
+        memoizedProps: { value: routerObj },
+        child: null,
+        sibling: null
+      }
+    };
+    const d = makeDoc(rootDiv);
+    d.getElementById = (id) => (id === "root" ? rootDiv : null);
+    d.querySelectorAll = () => [];
+    return d;
+  }
+
+  // Case 1: resolves AND updates pathname -> switched: true
+  const okRouter = {
+    state: { location: { pathname: "/c/cid-start", search: {} } },
+    navigate(opts) {
+      okRouter.state.location.pathname = "/c/" + opts.params.cascadeId;
+      return Promise.resolve();
+    }
+  };
+  const okRes = await probe.switchConversationAsync(
+    makeRouterDoc(okRouter),
+    { location: { pathname: "/c/cid-start" }, navigator: {} },
+    "cid-target",
+    ""
+  );
+  assert.deepEqual(okRes, { switched: true, method: "router", error: "" });
+
+  // Case 2: rejects Promise -> switched: false, method: router_error
+  const rejRouter = {
+    state: { location: { pathname: "/c/cid-start", search: {} } },
+    navigate() {
+      return Promise.reject(new Error("Permission denied"));
+    }
+  };
+  const rejRes = await probe.switchConversationAsync(
+    makeRouterDoc(rejRouter),
+    { location: { pathname: "/c/cid-start" }, navigator: {} },
+    "cid-target",
+    ""
+  );
+  assert.deepEqual(rejRes, { switched: false, method: "router_error", error: "Permission denied" });
+
+  // Case 3: resolves WITHOUT changing pathname -> switched: false, location_unchanged
+  const noopRouter = {
+    state: { location: { pathname: "/c/cid-start", search: {} } },
+    navigate() {
+      return Promise.resolve();
+    }
+  };
+  const noopRes = await probe.switchConversationAsync(
+    makeRouterDoc(noopRouter),
+    { location: { pathname: "/c/cid-start" }, navigator: {}, setTimeout },
+    "cid-target",
+    ""
+  );
+  assert.deepEqual(noopRes, { switched: false, method: "router_error", error: "location_unchanged" });
 });

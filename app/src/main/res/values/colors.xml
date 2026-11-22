@@ -15,6 +15,11 @@
     <color name="ag_hint_stroke">#BFDBFE</color>
     <color name="ag_editor_bg">#F1F5F9</color>
     <color name="ag_success">#16A34A</color>
+    <color name="ag_success_soft">#1A16A34A</color>
+    <color name="ag_warning">#D97706</color>
+    <color name="ag_warning_soft">#1AD97706</color>
     <color name="ag_error">#DC2626</color>
+    <color name="ag_error_soft">#1ADC2626</color>
+    <color name="ag_idle_soft">#1A64748B</color>
     <color name="ic_launcher_background">#0F172A</color>
 </resources>
