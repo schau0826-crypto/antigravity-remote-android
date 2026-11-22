@@ -1,0 +1,81 @@
+/* Non-breaking mobile viewport & CJK typography polish for Antigravity Remote on Android */
+
+html,
+body {
+  overscroll-behavior-y: contain;
+  -webkit-tap-highlight-color: rgba(56, 189, 248, 0.14);
+}
+
+/* Crisp CJK fallback while strictly leaving icon font classes untouched */
+body,
+button:not([class*="material"]):not([class*="symbol"]):not([class*="icon"]),
+input,
+textarea,
+select {
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+}
+
+button,
+a,
+summary,
+[role="button"],
+[role="tab"],
+[role="menuitem"],
+[role="switch"],
+[role="checkbox"],
+input,
+textarea,
+select {
+  touch-action: manipulation;
+}
+
+pre,
+code,
+.monaco-editor,
+.cm-editor,
+.CodeMirror {
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 768px) {
+  html,
+  body {
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
+
+  pre {
+    max-width: 100%;
+    overflow-x: auto;
+    border-radius: 10px;
+    padding: 10px 12px;
+  }
+
+  table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Prevent mobile viewport zoom when focusing inputs outside code editors */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  textarea:not(.monaco-mouse-cursor-text),
+  select {
+    font-size: max(16px, 1em);
+  }
+}
+
+@media (pointer: coarse) and (max-width: 768px) {
+  button:not([data-compact="true"]):not([class*="icon"]),
+  [role="button"]:not([data-compact="true"]):not([class*="icon"]),
+  [role="menuitem"] {
+    min-height: 36px;
+  }
+
+  [role="dialog"],
+  [role="menu"],
+  [role="listbox"] {
+    max-width: calc(100vw - 16px);
+  }
+}

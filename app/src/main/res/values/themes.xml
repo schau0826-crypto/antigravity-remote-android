@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.AntigravityRemote" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/ag_primary</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorSurface">@color/ag_surface</item>
+        <item name="colorOnSurface">@color/ag_text_primary</item>
+        <item name="android:windowBackground">@color/ag_bg</item>
+        <item name="android:colorBackground">@color/ag_bg</item>
+        <item name="android:statusBarColor">@color/ag_bg</item>
+        <item name="android:navigationBarColor">@color/ag_bg</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.AntigravityRemote.Dialog</item>
+        <item name="alertDialogTheme">@style/ThemeOverlay.AntigravityRemote.Dialog</item>
+        <item name="bottomSheetDialogTheme">@style/ThemeOverlay.AntigravityRemote.BottomSheet</item>
+    </style>
+
+    <style name="ThemeOverlay.AntigravityRemote.Dialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="colorSurface">@color/ag_surface</item>
+        <item name="colorOnSurface">@color/ag_text_primary</item>
+        <item name="colorPrimary">@color/ag_primary</item>
+        <item name="android:background">@color/ag_surface</item>
+    </style>
+
+    <style name="ThemeOverlay.AntigravityRemote.BottomSheet" parent="ThemeOverlay.Material3.BottomSheetDialog">
+        <item name="colorSurface">@color/ag_surface</item>
+        <item name="colorOnSurface">@color/ag_text_primary</item>
+        <item name="colorPrimary">@color/ag_primary</item>
+        <item name="bottomSheetStyle">@style/Widget.AntigravityRemote.BottomSheet</item>
+    </style>
+
+    <style name="Widget.AntigravityRemote.BottomSheet" parent="Widget.Material3.BottomSheet.Modal">
+        <item name="backgroundTint">@color/ag_surface</item>
+    </style>
+
+    <style name="AgToolbarButton">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">32dp</item>
+        <item name="android:minWidth">40dp</item>
+        <item name="android:paddingStart">12dp</item>
+        <item name="android:paddingEnd">12dp</item>
+        <item name="android:gravity">center</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:textColor">@color/ag_text_primary</item>
+        <item name="android:background">@drawable/bg_toolbar_btn</item>
+        <item name="android:singleLine">true</item>
+    </style>
+</resources>

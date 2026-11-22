@@ -1,0 +1,1144 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import vm from "node:vm";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const ROOT_DIR = path.resolve(__dirname, "..");
+const EXT_DIR = path.join(ROOT_DIR, "app", "src", "main", "assets", "i18n_zh_ext");
+
+const require = createRequire(import.meta.url);
+const dictZh = require(path.join(EXT_DIR, "dict_zh.js"));
+const translatorLib = require(path.join(EXT_DIR, "translator.js"));
+
+// ---------------------------------------------------------------------------
+// Lightweight Mock DOM (validates browser-free portability of translator.js)
+// ---------------------------------------------------------------------------
+class MockNode {
+  constructor(nodeType) {
+    this.nodeType = nodeType;
+    this.parentNode = null;
+    this.childNodes = [];
+    this.isConnected = true;
+  }
+
+  get parentElement() {
+    return this.parentNode && this.parentNode.nodeType === 1 ? this.parentNode : null;
+  }
+}
+
+class MockText extends MockNode {
+  constructor(text = "") {
+    super(3);
+    this.nodeValue = String(text);
+  }
+
+  get textContent() {
+    return this.nodeValue;
+  }
+
+  set textContent(val) {
+    this.nodeValue = String(val);
+  }
+}
+
+class MockElement extends MockNode {
+  constructor(tagName, attrs = {}, children = []) {
+    super(1);
+    this.tagName = String(tagName).toUpperCase();
+    this.nodeName = this.tagName;
+    this.attributes = Object.create(null);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (v !== null && v !== undefined) {
+        this.attributes[k] = String(v);
+      }
+    }
+    this.value = "value" in this.attributes ? this.attributes.value : "";
+    for (const child of children) {
+      this.appendChild(child);
+    }
+  }
+
+  appendChild(child) {
+    const node = typeof child === "string" ? new MockText(child) : child;
+    if (node.parentNode) {
+      node.parentNode.removeChild(node);
+    }
+    node.parentNode = this;
+    node.isConnected = this.isConnected;
+    this.childNodes.push(node);
+    return node;
+  }
+
+  removeChild(child) {
+    const idx = this.childNodes.indexOf(child);
+    if (idx >= 0) {
+      this.childNodes.splice(idx, 1);
+      child.parentNode = null;
+      child.isConnected = false;
+    }
+    return child;
+  }
+
+  getAttribute(name) {
+    return Object.prototype.hasOwnProperty.call(this.attributes, name)
+      ? this.attributes[name]
+      : null;
+  }
+
+  setAttribute(name, value) {
+    this.attributes[name] = String(value);
+  }
+
+  hasAttribute(name) {
+    return Object.prototype.hasOwnProperty.call(this.attributes, name);
+  }
+
+  get className() {
+    return this.attributes.class || "";
+  }
+
+  set className(val) {
+    this.attributes.class = String(val);
+  }
+
+  get textContent() {
+    return this.childNodes.map((c) => c.textContent).join("");
+  }
+
+  set textContent(val) {
+    this.childNodes = [];
+    if (val !== "" && val !== null && val !== undefined) {
+      this.appendChild(new MockText(String(val)));
+    }
+  }
+}
+
+class MockDocument extends MockNode {
+  constructor() {
+    super(9);
+    this.readyState = "complete";
+    this.documentElement = new MockElement("html");
+    this.body = new MockElement("body");
+    this.documentElement.appendChild(this.body);
+    this.documentElement.parentNode = this;
+    this.childNodes = [this.documentElement];
+    this._listeners = new Map();
+  }
+
+  createElement(tag) {
+    return new MockElement(tag);
+  }
+
+  createTextNode(text) {
+    return new MockText(text);
+  }
+
+  addEventListener(type, fn) {
+    if (!this._listeners.has(type)) {
+      this._listeners.set(type, []);
+    }
+    this._listeners.get(type).push(fn);
+  }
+
+  dispatchEvent(ev) {
+    const list = this._listeners.get(ev?.type) || [];
+    for (const fn of list) {
+      fn(ev);
+    }
+    return true;
+  }
+
+  querySelectorAll(selector) {
+    const results = [];
+    const parts = String(selector).split(",").map((s) => s.trim()).filter(Boolean);
+    const matchSingle = (el, sel) => {
+      if (sel === "textarea") return el.tagName === "TEXTAREA";
+      if (sel === "span") return el.tagName === "SPAN";
+      if (sel === "div") return el.tagName === "DIV";
+      if (sel === "p") return el.tagName === "P";
+      if (sel === "button") return el.tagName === "BUTTON";
+      if (sel === "[contenteditable='true']" || sel === '[contenteditable="true"]') {
+        return el.getAttribute("contenteditable") === "true";
+      }
+      if (sel === "[role='status']") return el.getAttribute("role") === "status";
+      if (sel.includes("aria-label")) {
+        const label = (el.getAttribute("aria-label") || "").toLowerCase();
+        return label.includes("stop") || label.includes("停止");
+      }
+      return false;
+    };
+    const walk = (node) => {
+      if (!node) return;
+      if (node.nodeType === 1) {
+        if (parts.some((p) => matchSingle(node, p))) {
+          results.push(node);
+        }
+      }
+      for (const child of node.childNodes || []) {
+        walk(child);
+      }
+    };
+    walk(this.documentElement);
+    return results;
+  }
+}
+
+function h(tag, attrsOrChild, ...rest) {
+  let attrs = {};
+  let children = [];
+  if (
+    attrsOrChild &&
+    typeof attrsOrChild === "object" &&
+    !(attrsOrChild instanceof MockNode) &&
+    !Array.isArray(attrsOrChild)
+  ) {
+    attrs = attrsOrChild;
+    children = rest;
+  } else if (attrsOrChild !== undefined) {
+    children = [attrsOrChild, ...rest];
+  }
+  const flat = [];
+  for (const c of children) {
+    if (Array.isArray(c)) {
+      flat.push(...c);
+    } else if (c !== null && c !== undefined) {
+      flat.push(c);
+    }
+  }
+  return new MockElement(tag, attrs, flat);
+}
+
+function makeDoc(...bodyChildren) {
+  const doc = new MockDocument();
+  for (const c of bodyChildren) {
+    doc.body.appendChild(c);
+  }
+  return doc;
+}
+
+function createMockMutationObserverClass() {
+  return class MockMutationObserver {
+    constructor(callback) {
+      this.callback = callback;
+      this.observed = [];
+      MockMutationObserver.instances.push(this);
+    }
+    observe(target, opts) {
+      this.observed.push({ target, opts });
+    }
+    disconnect() {
+      this.observed = [];
+    }
+    trigger(records) {
+      this.callback(records, this);
+    }
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 1. Manifest & Dictionary Integrity Tests
+// ---------------------------------------------------------------------------
+test("manifest.json follows MV2 GeckoView built-in WebExtension contract", () => {
+  const manifestRaw = fs.readFileSync(path.join(EXT_DIR, "manifest.json"), "utf8");
+  const manifest = JSON.parse(manifestRaw);
+
+  assert.equal(manifest.manifest_version, 2);
+  assert.equal(manifest.version, "1.0.2");
+  assert.equal(manifest.browser_specific_settings?.gecko?.id, "ag-remote-zh@agremote.local");
+
+  for (const perm of [
+    "nativeMessaging",
+    "nativeMessagingFromContent",
+    "geckoViewAddons",
+    "storage",
+    "tabs",
+    "https://antigravity.google.com/*",
+    "https://antigravity.google/*",
+    "https://*.antigravity.google/*",
+    "https://antigravity.static.usercontent.goog/*",
+    "https://*.usercontent.goog/*"
+  ]) {
+    assert.ok(manifest.permissions.includes(perm), `Missing permission: ${perm}`);
+  }
+
+  assert.deepEqual(manifest.background?.scripts, ["background.js"]);
+  assert.equal(manifest.content_scripts.length, 1);
+  const cs = manifest.content_scripts[0];
+  assert.ok(cs.matches.includes("https://antigravity.google.com/*"));
+  assert.ok(cs.matches.includes("https://antigravity.google/*"));
+  assert.ok(cs.matches.includes("https://*.antigravity.google/*"));
+  assert.ok(cs.matches.includes("https://antigravity.static.usercontent.goog/*"));
+  assert.ok(cs.matches.includes("https://*.usercontent.goog/*"));
+  assert.deepEqual(cs.js, ["dict_zh.js", "translator.js", "content.js"]);
+  assert.deepEqual(cs.css, ["mobile_polish.css"]);
+  assert.equal(cs.run_at, "document_idle");
+  assert.equal(cs.all_frames, true);
+});
+
+test("dict_zh.js contains 250+ exact UI entries and valid dynamic regex rules", () => {
+  const keys = Object.keys(dictZh.EXACT_DICT);
+  assert.ok(keys.length >= 250, `Expected >= 250 exact entries, got ${keys.length}`);
+  assert.ok(dictZh.REGEX_RULES.length >= 25);
+
+  // Spot check required Antigravity 2.0 & Remote Control entries
+  const required = [
+    "Remote Control",
+    "New Conversation",
+    "Files Changed",
+    "Subagents",
+    "Background Tasks",
+    "Plan Mode",
+    "Agent Mode",
+    "Allow once",
+    "Always allow",
+    "Allow in sandbox",
+    "Review Changes",
+    "Terminal Sandbox",
+    "MCP Servers",
+    "Ask anything...",
+    "Message Antigravity...",
+    "Type / for commands",
+    "Just now"
+  ];
+  for (const key of required) {
+    assert.equal(typeof dictZh.EXACT_DICT[key], "string", `Missing key: ${key}`);
+    assert.ok(dictZh.EXACT_DICT[key].length > 0);
+  }
+});
+
+test("dict_zh.js and translator.js load cleanly in plain browser script global scope (no ESM export syntax)", () => {
+  const dictSource = fs.readFileSync(path.join(EXT_DIR, "dict_zh.js"), "utf8");
+  const translatorSource = fs.readFileSync(path.join(EXT_DIR, "translator.js"), "utf8");
+
+  const sandbox = {
+    globalThis: null,
+    Set,
+    Map,
+    WeakMap,
+    WeakRef,
+    Object,
+    Array,
+    String,
+    Number,
+    Boolean,
+    RegExp,
+    Error,
+    setTimeout,
+    clearTimeout
+  };
+  sandbox.globalThis = sandbox;
+  vm.createContext(sandbox);
+  vm.runInContext(dictSource, sandbox);
+  vm.runInContext(translatorSource, sandbox);
+
+  assert.ok(sandbox.AG_I18N_DICT, "AG_I18N_DICT should attach to globalThis");
+  assert.ok(sandbox.AG_I18N_TRANSLATOR, "AG_I18N_TRANSLATOR should attach to globalThis");
+
+  const instance = sandbox.AG_I18N_TRANSLATOR.createTranslator({ dict: sandbox.AG_I18N_DICT });
+  const btn = h("button", "Allow once");
+  const doc = makeDoc(btn);
+  const stats = instance.translateTree(doc);
+  assert.equal(btn.textContent, "仅允许这一次");
+  assert.equal(stats.translatedCount, 1);
+});
+
+// ---------------------------------------------------------------------------
+// 2. Exact Dictionary & Dynamic Regex Translations
+// ---------------------------------------------------------------------------
+test("translates built-in UI controls, statuses, permissions, and settings accurately", () => {
+  const nav = h(
+    "nav",
+    h("a", { href: "#" }, "Projects"),
+    h("button", "New Conversation"),
+    h("span", "Remote Control"),
+    h("span", "Connected"),
+    h("button", "Plan Mode"),
+    h("button", "Allow once"),
+    h("button", "Always allow"),
+    h("button", "Deny"),
+    h("span", "Review Changes"),
+    h("button", "Terminal Sandbox"),
+    h("button", "MCP Servers")
+  );
+  const doc = makeDoc(nav);
+  const translator = translatorLib.createTranslator({ dict: dictZh });
+  const stats = translator.translateTree(doc);
+
+  assert.equal(nav.childNodes[0].textContent, "项目");
+  assert.equal(nav.childNodes[1].textContent, "新对话");
+  assert.equal(nav.childNodes[2].textContent, "远程控制");
+  assert.equal(nav.childNodes[3].textContent, "已连接");
+  assert.equal(nav.childNodes[4].textContent, "规划模式");
+  assert.equal(nav.childNodes[5].textContent, "仅允许这一次");
+  assert.equal(nav.childNodes[6].textContent, "始终允许");
+  assert.equal(nav.childNodes[7].textContent, "拒绝");
+  assert.equal(nav.childNodes[8].textContent, "审查更改");
+  assert.equal(nav.childNodes[9].textContent, "终端沙盒");
+  assert.equal(nav.childNodes[10].textContent, "MCP 服务器");
+  assert.equal(stats.translatedCount, 11);
+});
+
+test("translates dynamic regex templates for timestamps, diffs, thinking time, and steps", () => {
+  const panel = h(
+    "div",
+    { class: "status-bar" },
+    h("span", "5 minutes ago"),
+    h("span", "1 second ago"),
+    h("span", "3 files changed"),
+    h("span", "12 lines added"),
+    h("span", "4 lines removed"),
+    h("span", "Thought for 12 seconds"),
+    h("span", "Thought for 1.5s"),
+    h("span", "Step 2 of 5"),
+    h("span", "Showing lines 10-25 of 120"),
+    h("span", "4 running"),
+    h("span", "Connected to MacBook-Pro")
+  );
+  const doc = makeDoc(panel);
+  const translator = translatorLib.createTranslator({ dict: dictZh });
+  translator.translateTree(doc);
+
+  assert.equal(panel.childNodes[0].textContent, "5 分钟前");
+  assert.equal(panel.childNodes[1].textContent, "1 秒前");
+  assert.equal(panel.childNodes[2].textContent, "3 个文件已更改");
+  assert.equal(panel.childNodes[3].textContent, "新增 12 行");
+  assert.equal(panel.childNodes[4].textContent, "删除 4 行");
+  assert.equal(panel.childNodes[5].textContent, "思考了 12 秒");
+  assert.equal(panel.childNodes[6].textContent, "思考了 1.5 秒");
+  assert.equal(panel.childNodes[7].textContent, "第 2 / 5 步");
+  assert.equal(panel.childNodes[8].textContent, "显示第 10-25 行（共 120 行）");
+  assert.equal(panel.childNodes[9].textContent, "4 个运行中");
+  assert.equal(panel.childNodes[10].textContent, "已连接到 MacBook-Pro");
+});
+
+test("short lowercase tokens are not falsely translated unless exact-case UI match", () => {
+  const el = h(
+    "div",
+    h("span", "on"),
+    h("span", "no"),
+    h("button", "On"),
+    h("button", "OK"),
+    h("span", "remote control")
+  );
+  const doc = makeDoc(el);
+  const translator = translatorLib.createTranslator({ dict: dictZh });
+  translator.translateTree(doc);
+
+  assert.equal(el.childNodes[0].textContent, "on");
+  assert.equal(el.childNodes[1].textContent, "no");
+  assert.equal(el.childNodes[2].textContent, "开启");
+  assert.equal(el.childNodes[3].textContent, "确定");
+  assert.equal(el.childNodes[4].textContent, "远程控制");
+});
+
+// ---------------------------------------------------------------------------
+// 3. customDict Override Priority & Live Updates
+// ---------------------------------------------------------------------------
+test("customDict overrides built-in entries and updates live cleanly", () => {
+  const header = h(
+    "header",
+    h("span", "Remote Control"),
+    h("button", "My Custom Action"),
+    h("button", "Settings")
+  );
+  const doc = makeDoc(header);
+  const translator = translatorLib.createTranslator({
+    dict: dictZh,
+    customDict: {
+      "Remote Control": "手机遥控",
+      "My Custom Action": "自定义操作"
+    }
+  });
+
+  translator.translateTree(doc);
+  assert.equal(header.childNodes[0].textContent, "手机遥控");
+  assert.equal(header.childNodes[1].textContent, "自定义操作");
+  assert.equal(header.childNodes[2].textContent, "设置");
+
+  // Live update: change override and drop custom-only key
+  translator.setCustomDict({ "Remote Control": "远程接管" });
+  translator.translateTree(doc);
+  assert.equal(header.childNodes[0].textContent, "远程接管");
+  assert.equal(header.childNodes[1].textContent, "My Custom Action");
+  assert.equal(header.childNodes[2].textContent, "设置");
+
+  // Clear customDict: falls back to built-in exact translation
+  translator.setCustomDict({});
+  translator.translateTree(doc);
+  assert.equal(header.childNodes[0].textContent, "远程控制");
+});
+
+// ---------------------------------------------------------------------------
+// 4. Safety Guards: Code Blocks, Inputs, Editors, and No-Translate Subtrees
+// ---------------------------------------------------------------------------
+test("never translates code, pre, kbd, textarea, select, contenteditable, editors, or data-no-translate", () => {
+  const codeEl = h("code", "Allow once");
+  const preEl = h("pre", "Remote Control\nAllow once");
+  const kbdEl = h("kbd", "Settings");
+  const sampEl = h("samp", "Error");
+  const textareaEl = h("textarea", "Allow once");
+  const selectEl = h("select", h("option", "Plan Mode"), h("option", "Agent Mode"));
+  const ceTrueEl = h("div", { contenteditable: "true" }, h("span", "Allow once"));
+  const ceEmptyEl = h("div", { contenteditable: "" }, h("span", "Remote Control"));
+  const monacoEl = h("div", { class: "monaco-editor" }, h("span", "Settings"), h("button", "Close"));
+  const cmEl = h("div", { class: "cm-editor" }, h("span", "Files"));
+  const codeMirrorEl = h("div", { class: "CodeMirror" }, h("span", "Search"));
+  const noTransEl = h("div", { "data-no-translate": "" }, h("button", "Allow once"));
+  const translateNoEl = h("div", { translate: "no" }, h("button", "Cancel"));
+  const svgEl = h("svg", h("text", "Close"));
+  const btnCodeEl = h("button", h("code", "Settings"));
+
+  const doc = makeDoc(
+    codeEl,
+    preEl,
+    kbdEl,
+    sampEl,
+    textareaEl,
+    selectEl,
+    ceTrueEl,
+    ceEmptyEl,
+    monacoEl,
+    cmEl,
+    codeMirrorEl,
+    noTransEl,
+    translateNoEl,
+    svgEl,
+    btnCodeEl
+  );
+
+  const translator = translatorLib.createTranslator({ dict: dictZh });
+  const stats = translator.translateTree(doc);
+
+  assert.equal(codeEl.textContent, "Allow once");
+  assert.equal(preEl.textContent, "Remote Control\nAllow once");
+  assert.equal(kbdEl.textContent, "Settings");
+  assert.equal(sampEl.textContent, "Error");
+  assert.equal(textareaEl.textContent, "Allow once");
+  assert.equal(selectEl.childNodes[0].textContent, "Plan Mode");
+  assert.equal(ceTrueEl.textContent, "Allow once");
+  assert.equal(ceEmptyEl.textContent, "Remote Control");
+  assert.equal(monacoEl.textContent, "SettingsClose");
+  assert.equal(cmEl.textContent, "Files");
+  assert.equal(codeMirrorEl.textContent, "Search");
+  assert.equal(noTransEl.textContent, "Allow once");
+  assert.equal(translateNoEl.textContent, "Cancel");
+  assert.equal(svgEl.textContent, "Close");
+  assert.equal(btnCodeEl.textContent, "Settings");
+  assert.equal(stats.translatedCount, 0);
+});
+
+// ---------------------------------------------------------------------------
+// 5. Prose / AI Message Protection + Nested Interactive Control Translation
+// ---------------------------------------------------------------------------
+test("protects AI/user prose and code snippets while translating nested interactive controls and chrome labels", () => {
+  const longProse =
+    "To configure your workspace permissions safely, please review the local sandbox settings and verify that every command in the pipeline matches your policy.";
+  const inlineProseP = h("p", "Please click ", h("strong", "Allow once"), " to approve this action.");
+  const markdownProseOnlyP = h("p", "Settings");
+  const codeLikeSpan = h("span", "const config = { Settings: true };");
+  const arrowFnSpan = h("span", "() => Remote Control");
+  const multiSentenceSpan = h("span", "Build failed. Please retry.");
+
+  const nestedButton = h("button", "Allow once");
+  const nestedLink = h("a", { href: "#diff" }, "View diff");
+  const nestedChip = h("span", { role: "button" }, "Copy");
+  const nestedTab = h("div", { role: "tab" }, "Files Changed");
+  const nestedMenuItem = h("div", { role: "menuitem" }, "Rename");
+  const nestedOption = h("div", { role: "option" }, "Plan Mode");
+  const nestedSwitch = h("div", { role: "switch" }, "Auto");
+  const nestedCheckbox = h("div", { role: "checkbox" }, "Enable Notifications");
+  const nestedSummary = h("summary", "Show more");
+  const nestedTh = h("th", "Files");
+  const statusChrome = h("span", { class: "meta" }, "Thought for 12 seconds");
+
+  const messageContainer = h(
+    "div",
+    { class: "message-body" },
+    statusChrome,
+    h(
+      "div",
+      { class: "markdown-body prose" },
+      h("p", longProse),
+      inlineProseP,
+      markdownProseOnlyP,
+      codeLikeSpan,
+      arrowFnSpan,
+      multiSentenceSpan,
+      nestedButton,
+      nestedLink,
+      nestedChip,
+      nestedTab,
+      nestedMenuItem,
+      nestedOption,
+      nestedSwitch,
+      nestedCheckbox,
+      nestedSummary,
+      h("table", h("thead", h("tr", nestedTh)))
+    )
+  );
+
+  const doc = makeDoc(messageContainer);
+  const translator = translatorLib.createTranslator({ dict: dictZh });
+  translator.translateTree(doc);
+
+  // Prose & code-like strings remain completely untouched
+  assert.equal(inlineProseP.textContent, "Please click Allow once to approve this action.");
+  assert.equal(markdownProseOnlyP.textContent, "Settings");
+  assert.equal(codeLikeSpan.textContent, "const config = { Settings: true };");
+  assert.equal(arrowFnSpan.textContent, "() => Remote Control");
+  assert.equal(multiSentenceSpan.textContent, "Build failed. Please retry.");
+
+  // Nested interactive UI controls and outside-markdown status chrome ARE translated
+  assert.equal(statusChrome.textContent, "思考了 12 秒");
+  assert.equal(nestedButton.textContent, "仅允许这一次");
+  assert.equal(nestedLink.textContent, "查看差异");
+  assert.equal(nestedChip.textContent, "复制");
+  assert.equal(nestedTab.textContent, "已更改文件");
+  assert.equal(nestedMenuItem.textContent, "重命名");
+  assert.equal(nestedOption.textContent, "规划模式");
+  assert.equal(nestedSwitch.textContent, "自动");
+  assert.equal(nestedCheckbox.textContent, "启用通知");
+  assert.equal(nestedSummary.textContent, "显示更多");
+  assert.equal(nestedTh.textContent, "文件");
+});
+
+test("translates and restores open Shadow DOM subtrees", () => {
+  const host = h("div");
+  const shadowBtn = h("button", "Accept all");
+  host.shadowRoot = new MockNode(11);
+  host.shadowRoot.childNodes = [shadowBtn];
+  shadowBtn.parentNode = host.shadowRoot;
+
+  const doc = makeDoc(host);
+  const translator = translatorLib.createTranslator({ dict: dictZh });
+  translator.translateTree(doc);
+  assert.equal(shadowBtn.textContent, "全部接受");
+
+  translator.setEnabled(false);
+  translator.restoreTree(doc);
+  assert.equal(shadowBtn.textContent, "Accept all");
+});
+
+// ---------------------------------------------------------------------------
+// 6. Attribute Translation without Mutating Input Values
+// ---------------------------------------------------------------------------
+test("translates placeholder, aria-label, and title without mutating input value or textarea text", () => {
+  const input = h("input", {
+    type: "text",
+    placeholder: "Ask anything...",
+    "aria-label": "Message Antigravity...",
+    title: "Enter command...",
+    value: "Allow once"
+  });
+  const textarea = h(
+    "textarea",
+    {
+      placeholder: "Type a message...",
+      "aria-label": "Add a comment..."
+    },
+    "Allow once"
+  );
+  const iconBtn = h("button", { "aria-label": "Close", title: "Settings" }, "×");
+  const protectedInput = h("input", {
+    "data-no-translate": "true",
+    placeholder: "Ask anything..."
+  });
+
+  const doc = makeDoc(input, textarea, iconBtn, protectedInput);
+  const translator = translatorLib.createTranslator({ dict: dictZh });
+  translator.translateTree(doc);
+
+  assert.equal(input.getAttribute("placeholder"), "有问题尽管问...");
+  assert.equal(input.getAttribute("aria-label"), "向 Antigravity 发送消息...");
+  assert.equal(input.getAttribute("title"), "输入命令...");
+  assert.equal(input.value, "Allow once");
+  assert.equal(input.getAttribute("value"), "Allow once");
+
+  assert.equal(textarea.getAttribute("placeholder"), "输入消息...");
+  assert.equal(textarea.getAttribute("aria-label"), "添加评论...");
+  assert.equal(textarea.textContent, "Allow once");
+
+  assert.equal(iconBtn.getAttribute("aria-label"), "关闭");
+  assert.equal(iconBtn.getAttribute("title"), "设置");
+  assert.equal(iconBtn.textContent, "×");
+
+  assert.equal(protectedInput.getAttribute("placeholder"), "Ask anything...");
+});
+
+// ---------------------------------------------------------------------------
+// 7. Lossless Toggle, Whitespace Preservation, Idempotency & In-place Updates
+// ---------------------------------------------------------------------------
+test("lossless toggle EN -> ZH -> EN -> ZH preserves whitespace and exact original text", () => {
+  const btn = h("button", "\n  Allow once\t");
+  const input = h("input", { placeholder: " Ask anything... " });
+  const status = h("span", "  5 minutes ago  ");
+  const doc = makeDoc(btn, input, status);
+
+  const translator = translatorLib.createTranslator({ dict: dictZh });
+
+  // Pass 1: EN -> ZH
+  const s1 = translator.translateTree(doc);
+  assert.equal(btn.textContent, "\n  仅允许这一次\t");
+  assert.equal(input.getAttribute("placeholder"), " 有问题尽管问... ");
+  assert.equal(status.textContent, "  5 分钟前  ");
+  assert.equal(s1.translatedCount, 3);
+
+  // Pass 2 & 3: Idempotency
+  const s2 = translator.translateTree(doc);
+  assert.equal(btn.textContent, "\n  仅允许这一次\t");
+  assert.equal(s2.translatedCount, 3);
+
+  // Toggle OFF: Lossless restore
+  translator.setEnabled(false);
+  const restored = translator.restoreTree(doc);
+  assert.equal(btn.textContent, "\n  Allow once\t");
+  assert.equal(input.getAttribute("placeholder"), " Ask anything... ");
+  assert.equal(status.textContent, "  5 minutes ago  ");
+  assert.equal(restored.restoredCount, 3);
+
+  // Toggle ON: Re-apply ZH
+  translator.setEnabled(true);
+  const s3 = translator.translateTree(doc);
+  assert.equal(btn.textContent, "\n  仅允许这一次\t");
+  assert.equal(input.getAttribute("placeholder"), " 有问题尽管问... ");
+  assert.equal(status.textContent, "  5 分钟前  ");
+  assert.equal(s3.translatedCount, 3);
+});
+
+test("handles SPA in-place text node updates accurately and restores the new source text", () => {
+  const badge = h("span", "Working");
+  const doc = makeDoc(badge);
+  const translator = translatorLib.createTranslator({ dict: dictZh });
+
+  translator.translateTree(doc);
+  assert.equal(badge.textContent, "执行中");
+
+  // Simulate React updating the same Text node in-place
+  badge.childNodes[0].nodeValue = "Completed";
+  translator.translateTree(doc);
+  assert.equal(badge.textContent, "已完成");
+
+  // Disabling should restore "Completed", not stale "Working"
+  translator.setEnabled(false);
+  translator.restoreTree(doc);
+  assert.equal(badge.textContent, "Completed");
+});
+
+// ---------------------------------------------------------------------------
+// 8. Throttled MutationObserver Controller
+// ---------------------------------------------------------------------------
+test("createObserverController batches streaming mutations and reports accurate stats", async () => {
+  const MockMO = createMockMutationObserverClass();
+  MockMO.instances = [];
+
+  const list = h("div", h("button", "Save"));
+  const doc = makeDoc(list);
+  const translator = translatorLib.createTranslator({ dict: dictZh });
+  translator.translateTree(doc);
+
+  const reported = [];
+  const ctrl = translatorLib.createObserverController({
+    translator,
+    root: doc,
+    debounceMs: 25,
+    MutationObserver: MockMO,
+    onTranslated: (stats) => reported.push(stats.translatedCount)
+  });
+
+  assert.equal(ctrl.start(), true);
+  assert.equal(ctrl.isRunning(), true);
+  assert.equal(MockMO.instances.length, 1);
+
+  const observer = MockMO.instances[0];
+  const added1 = h("button", "Cancel");
+  const added2 = h("span", "2 minutes ago");
+  list.appendChild(added1);
+  list.appendChild(added2);
+
+  // Trigger rapid burst + self-mutation noise that should be ignored
+  observer.trigger([
+    { type: "childList", addedNodes: [added1] },
+    { type: "childList", addedNodes: [added2] },
+    { type: "characterData", target: list.childNodes[0].childNodes[0] }
+  ]);
+
+  await new Promise((resolve) => setTimeout(resolve, 60));
+
+  assert.equal(added1.textContent, "取消");
+  assert.equal(added2.textContent, "2 分钟前");
+  assert.equal(reported.length, 1);
+  assert.equal(reported[0], 3);
+
+  ctrl.stop();
+  assert.equal(ctrl.isRunning(), false);
+});
+
+// ---------------------------------------------------------------------------
+// 9. Native Messaging Protocol Smoke Test for background.js & content.js
+// ---------------------------------------------------------------------------
+test("background.js and content.js wire native port READY, CONFIG_UPDATE, and STATS cleanly", async () => {
+  const bgSource = fs.readFileSync(path.join(EXT_DIR, "background.js"), "utf8");
+  const contentSource = fs.readFileSync(path.join(EXT_DIR, "content.js"), "utf8");
+
+  const storageState = {};
+  const storageChangedListeners = [];
+  const nativeMessagesSent = [];
+  const portMessageListeners = [];
+  const bgRuntimeListeners = [];
+  const contentRuntimeListeners = [];
+  const tabMessagesSent = [];
+
+  const mockPort = {
+    postMessage(msg) {
+      nativeMessagesSent.push(JSON.parse(JSON.stringify(msg)));
+    },
+    onMessage: {
+      addListener(fn) {
+        portMessageListeners.push(fn);
+      }
+    },
+    onDisconnect: {
+      addListener() {}
+    },
+    disconnect() {}
+  };
+
+  let connectedAppId = null;
+  const bgBrowser = {
+    runtime: {
+      connectNative(appId) {
+        connectedAppId = appId;
+        return mockPort;
+      },
+      onMessage: {
+        addListener(fn) {
+          bgRuntimeListeners.push(fn);
+        }
+      }
+    },
+    storage: {
+      local: {
+        async get(keys) {
+          const out = {};
+          for (const k of keys) {
+            if (k in storageState) {
+              out[k] = storageState[k];
+            }
+          }
+          return out;
+        },
+        async set(obj) {
+          Object.assign(storageState, obj);
+        }
+      }
+    },
+    tabs: {
+      async query() {
+        return [{ id: 101, url: "https://antigravity.google.com/" }];
+      },
+      async sendMessage(tabId, payload) {
+        tabMessagesSent.push({ tabId, payload });
+        for (const fn of contentRuntimeListeners) {
+          fn(payload);
+        }
+      }
+    }
+  };
+
+  const bgCtx = {
+    browser: bgBrowser,
+    Object,
+    Array,
+    String,
+    Number,
+    Boolean,
+    Promise,
+    JSON,
+    Math,
+    setTimeout,
+    clearTimeout
+  };
+  vm.createContext(bgCtx);
+  vm.runInContext(bgSource, bgCtx);
+
+  assert.equal(connectedAppId, "ag_remote_i18n");
+  assert.deepEqual(nativeMessagesSent[0], { type: "READY", version: "1.0.2" });
+
+  // Simulate Android -> Extension CONFIG_UPDATE
+  for (const fn of portMessageListeners) {
+    fn({
+      type: "CONFIG_UPDATE",
+      enabled: true,
+      customDict: { "Remote Control": "远程接管" }
+    });
+  }
+  await new Promise((r) => setTimeout(r, 10));
+
+  assert.equal(storageState.enabled, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(storageState.customDict)), { "Remote Control": "远程接管" });
+  assert.equal(tabMessagesSent.length, 1);
+  assert.equal(tabMessagesSent[0].tabId, 101);
+
+  // Now mount content.js against a MockDocument wired to bgBrowser runtime handlers
+  const titleSpan = h("span", "Remote Control");
+  const actionBtn = h("button", "Allow once");
+  const doc = makeDoc(titleSpan, actionBtn);
+  const MockMO = createMockMutationObserverClass();
+  MockMO.instances = [];
+
+  const contentBrowser = {
+    runtime: {
+      async sendMessage(msg) {
+        for (const fn of bgRuntimeListeners) {
+          const res = fn(msg);
+          if (res && typeof res.then === "function") {
+            return await res;
+          }
+        }
+        return undefined;
+      },
+      onMessage: {
+        addListener(fn) {
+          contentRuntimeListeners.push(fn);
+        }
+      }
+    },
+    storage: {
+      local: bgBrowser.storage.local,
+      onChanged: {
+        addListener(fn) {
+          storageChangedListeners.push(fn);
+        }
+      }
+    }
+  };
+
+  const contentCtx = {
+    globalThis: null,
+    AG_I18N_DICT: dictZh,
+    AG_I18N_TRANSLATOR: translatorLib,
+    document: doc,
+    browser: contentBrowser,
+    MutationObserver: MockMO,
+    Object,
+    Array,
+    String,
+    Number,
+    Boolean,
+    Promise,
+    Date,
+    Math,
+    setTimeout,
+    clearTimeout
+  };
+  contentCtx.globalThis = contentCtx;
+  vm.createContext(contentCtx);
+  vm.runInContext(contentSource, contentCtx);
+
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(titleSpan.textContent, "远程接管");
+  assert.equal(actionBtn.textContent, "仅允许这一次");
+  assert.ok(
+    nativeMessagesSent.some((m) => m.type === "STATS" && m.translatedCount === 2),
+    "Expected STATS message with translatedCount 2"
+  );
+
+  // Live toggle OFF from Android
+  for (const fn of portMessageListeners) {
+    fn({
+      type: "CONFIG_UPDATE",
+      enabled: false,
+      customDict: { "Remote Control": "远程接管" }
+    });
+  }
+  await new Promise((r) => setTimeout(r, 20));
+
+  assert.equal(titleSpan.textContent, "Remote Control");
+  assert.equal(actionBtn.textContent, "Allow once");
+  assert.ok(
+    nativeMessagesSent.some((m) => m.type === "STATS" && m.translatedCount === 0),
+    "Expected STATS message with translatedCount 0 after toggle off"
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 10. Material Icon Ligatures, Real Antigravity 2.34.0 Strings, Multi-frame STATS & Stall Recovery
+// ---------------------------------------------------------------------------
+test("protects Material icon ligatures while still translating outer button aria-label/title", () => {
+  const feedbackBtn = h(
+    "button",
+    { "aria-label": "Send Feedback", title: "Feedback" },
+    h("span", { class: "material-symbols-outlined" }, "feedback")
+  );
+  const googleIconBtn = h(
+    "button",
+    { "aria-label": "Open settings" },
+    h("span", { class: "google-material-icons" }, "settings")
+  );
+  const ariaHiddenIcon = h("span", { "aria-hidden": "true" }, "feedback");
+  const normalLabel = h("span", "Feedback");
+  const doc = makeDoc(feedbackBtn, googleIconBtn, ariaHiddenIcon, normalLabel);
+
+  const translator = translatorLib.createTranslator({ dict: dictZh });
+  translator.translateTree(doc);
+
+  assert.equal(feedbackBtn.childNodes[0].textContent, "feedback");
+  assert.equal(feedbackBtn.getAttribute("aria-label"), "发送反馈");
+  assert.equal(feedbackBtn.getAttribute("title"), "反馈");
+  assert.equal(googleIconBtn.childNodes[0].textContent, "settings");
+  assert.equal(googleIconBtn.getAttribute("aria-label"), "打开设置");
+  assert.equal(ariaHiddenIcon.textContent, "feedback");
+  assert.equal(normalLabel.textContent, "反馈");
+});
+
+test("translates real Antigravity 2.34.0 iframe UI strings cleanly", () => {
+  const doc = makeDoc(
+    h("span", "just now"),
+    h("span", "Thought for 10s"),
+    h("span", "Thought for 1m 25s"),
+    h("div", "Working"),
+    h("input", { placeholder: "Ask anything, @ to mention, / for actions" }),
+    h("span", "3m ago")
+  );
+
+  const translator = translatorLib.createTranslator({ dict: dictZh });
+  translator.translateTree(doc);
+
+  const children = doc.body.childNodes;
+  assert.equal(children[0].textContent, "刚刚");
+  assert.equal(children[1].textContent, "思考了 10 秒");
+  assert.equal(children[2].textContent, "思考了 1 分 25 秒");
+  assert.equal(children[3].textContent, "执行中");
+  assert.equal(children[4].getAttribute("placeholder"), "输入指令，@ 引用上下文，/ 调用命令");
+  assert.equal(children[5].textContent, "3 分钟前");
+});
+
+test("background.js aggregates STATS across outer frame and iframe and relays APP_RESUMED / STREAM_STALLED", async () => {
+  const bgSource = fs.readFileSync(path.join(EXT_DIR, "background.js"), "utf8");
+  const contentSource = fs.readFileSync(path.join(EXT_DIR, "content.js"), "utf8");
+
+  const nativeMessagesSent = [];
+  const portMessageListeners = [];
+  const bgRuntimeListeners = [];
+  const contentRuntimeListeners = [];
+  const wokeEvents = [];
+
+  const mockPort = {
+    postMessage(msg) {
+      nativeMessagesSent.push(JSON.parse(JSON.stringify(msg)));
+    },
+    onMessage: { addListener: (fn) => portMessageListeners.push(fn) },
+    onDisconnect: { addListener() {} },
+    disconnect() {}
+  };
+
+  const bgBrowser = {
+    runtime: {
+      connectNative: () => mockPort,
+      onMessage: { addListener: (fn) => bgRuntimeListeners.push(fn) }
+    },
+    storage: {
+      local: {
+        async get() { return { enabled: true, customDict: {} }; },
+        async set() {}
+      }
+    },
+    tabs: {
+      async query() { return [{ id: 1, url: "https://antigravity.google.com/r/abc" }]; },
+      async sendMessage(_tabId, payload) {
+        for (const fn of contentRuntimeListeners) {
+          fn(payload);
+        }
+      },
+      onRemoved: { addListener() {} }
+    }
+  };
+
+  const bgCtx = {
+    browser: bgBrowser,
+    Map, Object, Array, String, Number, Boolean, Promise, JSON, Math, setTimeout, clearTimeout
+  };
+  vm.createContext(bgCtx);
+  vm.runInContext(bgSource, bgCtx);
+
+  // Outer frame reports 3, inner iframe reports 18 -> aggregated total must be 21
+  for (const fn of bgRuntimeListeners) {
+    fn({ type: "STATS", translatedCount: 3 }, { tab: { id: 1 }, frameId: 0 });
+    fn({ type: "STATS", translatedCount: 18 }, { tab: { id: 1 }, frameId: 2 });
+  }
+  assert.equal(nativeMessagesSent.at(-1).translatedCount, 21);
+
+  // Mount content.js in a mock iframe running conversation with a Working status
+  const statusBadge = h("div", "Working");
+  const inputBox = h("textarea", { value: "" });
+  const doc = makeDoc(statusBadge, inputBox);
+  const MockMO = createMockMutationObserverClass();
+  MockMO.instances = [];
+
+  const fastSetTimeout = (fn, ms) => setTimeout(fn, Math.min(ms, 25));
+  const contentBrowser = {
+    runtime: {
+      async sendMessage(msg) {
+        for (const fn of bgRuntimeListeners) {
+          const r = fn(msg, { tab: { id: 1 }, frameId: 2 });
+          if (r && typeof r.then === "function") return await r;
+        }
+        return undefined;
+      },
+      onMessage: { addListener: (fn) => contentRuntimeListeners.push(fn) }
+    },
+    storage: {
+      local: bgBrowser.storage.local,
+      onChanged: { addListener() {} }
+    }
+  };
+
+  const contentCtx = {
+    globalThis: null,
+    AG_I18N_DICT: dictZh,
+    AG_I18N_TRANSLATOR: translatorLib,
+    document: doc,
+    browser: contentBrowser,
+    location: { href: "https://antigravity.static.usercontent.goog/web/2.34.0/" },
+    MutationObserver: MockMO,
+    Event: class MockEvent { constructor(t) { this.type = t; } },
+    dispatchEvent(ev) { wokeEvents.push(ev.type); },
+    Object, Array, String, Number, Boolean, Promise, Date, Math,
+    setTimeout: fastSetTimeout,
+    clearTimeout
+  };
+  contentCtx.globalThis = contentCtx;
+  vm.createContext(contentCtx);
+  vm.runInContext(contentSource, contentCtx);
+
+  await new Promise((r) => setTimeout(r, 15));
+
+  // Trigger APP_RESUMED from Android -> wakes events and detects frozen stream -> STREAM_STALLED(hasDraft=false)
+  for (const fn of portMessageListeners) {
+    fn({ type: "APP_RESUMED", backgroundMs: 6000 });
+  }
+  await new Promise((r) => setTimeout(r, 60));
+
+  assert.ok(wokeEvents.includes("online"));
+  assert.ok(wokeEvents.includes("focus"));
+  const stalledNoDraft = nativeMessagesSent.find((m) => m.type === "STREAM_STALLED");
+  assert.ok(stalledNoDraft, "Expected STREAM_STALLED when running conversation freezes after resume");
+  assert.equal(stalledNoDraft.hasDraft, false);
+
+  // Now put unsent draft in textarea -> STREAM_STALLED must report hasDraft=true
+  nativeMessagesSent.length = 0;
+  inputBox.value = "请继续优化";
+  for (const fn of portMessageListeners) {
+    fn({ type: "APP_RESUMED", backgroundMs: 6000 });
+  }
+  await new Promise((r) => setTimeout(r, 60));
+
+  const stalledWithDraft = nativeMessagesSent.find((m) => m.type === "STREAM_STALLED");
+  assert.ok(stalledWithDraft);
+  assert.equal(stalledWithDraft.hasDraft, true);
+});

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ag_bg">#FFFFFF</color>
+    <color name="ag_surface">#F8FAFC</color>
+    <color name="ag_surface_elevated">#EEF2F6</color>
+    <color name="ag_border">#E2E8F0</color>
+    <color name="ag_primary">#2563EB</color>
+    <color name="ag_primary_soft">#1A2563EB</color>
+    <color name="ag_primary_dim">#1D4ED8</color>
+    <color name="ag_text_primary">#0F172A</color>
+    <color name="ag_text_secondary">#64748B</color>
+    <color name="ag_fab_bg">#EBFFFFFF</color>
+    <color name="ag_fab_stroke">#CBD5E1</color>
+    <color name="ag_hint_bg">#EFF6FF</color>
+    <color name="ag_hint_stroke">#BFDBFE</color>
+    <color name="ag_editor_bg">#F1F5F9</color>
+    <color name="ag_success">#16A34A</color>
+    <color name="ag_error">#DC2626</color>
+    <color name="ic_launcher_background">#0F172A</color>
+</resources>

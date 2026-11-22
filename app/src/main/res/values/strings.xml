@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Antigravity 远程</string>
+    <string name="toolbar_home">设备列表</string>
+    <string name="toolbar_back">返回上页</string>
+    <string name="toolbar_reload">同步刷新</string>
+    <string name="toolbar_i18n_on">中文已开启</string>
+    <string name="toolbar_i18n_off">英文原版</string>
+    <string name="toolbar_ua_desktop">桌面网页</string>
+    <string name="toolbar_ua_mobile">移动网页</string>
+    <string name="toolbar_settings">更多设置</string>
+    <string name="quick_menu_desc">打开快捷操作面板</string>
+    <string name="loading_connecting">正在连接 Antigravity…</string>
+    <string name="loading_subhint">首次加载或跨网络环境可能需数秒</string>
+    <string name="loading_retry">加载较慢？点此重试</string>
+    <string name="popup_default_title">账号验证 / 外部弹窗</string>
+    <string name="popup_close">关闭</string>
+    <string name="sheet_title">Antigravity 远程</string>
+    <string name="sheet_clear_cache">清除网页缓存并刷新</string>
+    <string name="settings_title">Antigravity Remote 设置</string>
+    <string name="settings_save">保存并应用</string>
+    <string name="settings_cancel">取消</string>
+    <string name="settings_hint_title">连接与桌面端指引</string>
+    <string name="settings_hint_body">• 请确保当前手机网络可正常访问 Google 服务。\n• 请在电脑端打开 Antigravity Desktop 设置开启 Remote Control，或在终端执行：\n  agy remote-control start</string>
+    <string name="settings_home_url_label">主页地址 (Home URL)</string>
+    <string name="settings_reset_default_url">恢复默认</string>
+    <string name="settings_remember_remote_switch">启动时直达上次设备</string>
+    <string name="settings_remember_remote_desc">自动记住最后连接的远程机器，下次冷启动跳过设备列表直接进入</string>
+    <string name="settings_auto_reconnect_switch">后台切回自动重连流</string>
+    <string name="settings_auto_reconnect_desc">从后台返回发现运行中的对话卡住时自动同步最新进展（有未发草稿时仅提醒不覆盖）</string>
+    <string name="settings_i18n_switch">界面中文汉化</string>
+    <string name="settings_i18n_desc">开启后仅汉化控制界面文本，完整保留图标、代码块、终端与对话原文</string>
+    <string name="settings_desktop_ua_switch">桌面端模式 (Desktop UA)</string>
+    <string name="settings_desktop_ua_desc">遇到窄屏布局受限时可切换为桌面 User-Agent 并自动刷新</string>
+    <string name="settings_keep_awake_switch">保持屏幕常亮</string>
+    <string name="settings_keep_awake_desc">长时间监控远程任务执行时防止自动熄屏</string>
+    <string name="settings_custom_dict_label">自定义汉化词典 (JSON 对象)</string>
+    <string name="settings_custom_dict_hint">{"Remote Control": "远程控制"}</string>
+    <string name="settings_format_json">格式化</string>
+    <string name="settings_clear_cache">清除网页缓存并刷新（保留登录态）</string>
+    <string name="cache_cleared_toast">已清除缓存并刷新（登录状态已保留）</string>
+    <string name="external_browser_error">未找到可打开外部链接的应用</string>
+</resources>

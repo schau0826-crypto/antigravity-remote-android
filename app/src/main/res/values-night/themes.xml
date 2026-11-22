@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.AntigravityRemote" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/ag_primary</item>
+        <item name="colorOnPrimary">@color/ag_bg</item>
+        <item name="colorSurface">@color/ag_surface</item>
+        <item name="colorOnSurface">@color/ag_text_primary</item>
+        <item name="android:windowBackground">@color/ag_bg</item>
+        <item name="android:colorBackground">@color/ag_bg</item>
+        <item name="android:statusBarColor">@color/ag_bg</item>
+        <item name="android:navigationBarColor">@color/ag_bg</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.AntigravityRemote.Dialog</item>
+        <item name="alertDialogTheme">@style/ThemeOverlay.AntigravityRemote.Dialog</item>
+        <item name="bottomSheetDialogTheme">@style/ThemeOverlay.AntigravityRemote.BottomSheet</item>
+    </style>
+</resources>
