@@ -125,6 +125,16 @@ class ExtensionBridge {
         }
     }
 
+    fun resetSessionState() {
+        val cleared = SessionSnapshot()
+        latestSnapshot = cleared
+        mainHandler.post {
+            for (listener in snapshotListeners) {
+                listener(cleared)
+            }
+        }
+    }
+
     fun switchConversation(requestId: String, cascadeId: String, projectId: String): Boolean {
         val port = activePort ?: return false
         mainHandler.post {
@@ -167,7 +177,7 @@ class ExtensionBridge {
 
         when (json.optString("type")) {
             "READY" -> {
-                val version = json.optString("version", "1.1.0").ifBlank { "1.1.0" }
+                val version = json.optString("version", "1.1.1").ifBlank { "1.1.1" }
                 Log.i(TAG, "WebExtension READY version=$version")
                 updateState { it.copy(connected = true, ready = true, version = version) }
                 if (replyPort != null) {

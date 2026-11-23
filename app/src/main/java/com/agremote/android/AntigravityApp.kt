@@ -84,7 +84,7 @@ class AntigravityApp : Application() {
                 .preferredColorScheme(GeckoRuntimeSettings.COLOR_SCHEME_SYSTEM)
                 .inputAutoZoomEnabled(false)
                 .doubleTapZoomingEnabled(true)
-                .consoleOutput(false)
+                .consoleOutput(BuildConfig.DEBUG)
                 .remoteDebuggingEnabled(false)
                 .aboutConfigEnabled(false)
                 .trustedRecursiveResolverMode(GeckoRuntimeSettings.TRR_MODE_OFF)

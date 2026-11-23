@@ -129,6 +129,140 @@
             android:visibility="gone" />
     </FrameLayout>
 
+    <!-- Non-blocking banner when outer remote instance handshake stalls -->
+    <LinearLayout
+        android:id="@+id/layout_reconnect_banner"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:layout_margin="12dp"
+        android:background="@drawable/bg_context_card"
+        android:elevation="6dp"
+        android:gravity="center_vertical"
+        android:orientation="vertical"
+        android:padding="12dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/tv_reconnect_banner_msg"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/reconnect_banner_title"
+            android:textColor="@color/ag_text_primary"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:gravity="end|center_vertical"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btn_banner_devices"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minHeight="36dp"
+                android:text="@string/reconnect_banner_devices"
+                android:textColor="@color/ag_text_secondary"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/btn_banner_reconnect"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:minHeight="36dp"
+                android:text="@string/reconnect_banner_retry"
+                android:textColor="@color/ag_primary"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/btn_banner_dismiss"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:minWidth="40dp"
+                android:minHeight="36dp"
+                android:text="×"
+                android:textColor="@color/ag_text_secondary"
+                android:textSize="15sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Localized error fallback overlay for offline / proxy / SSL / crash loop -->
+    <LinearLayout
+        android:id="@+id/layout_error_overlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/ag_bg"
+        android:clickable="true"
+        android:elevation="7dp"
+        android:focusable="true"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:padding="28dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/tv_error_title"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:textColor="@color/ag_text_primary"
+            android:textSize="17sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tv_error_detail"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:gravity="center"
+            android:lineSpacingExtra="3dp"
+            android:textColor="@color/ag_text_secondary"
+            android:textSize="13sp" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:gravity="center"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btn_error_home"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/error_go_home"
+                android:textColor="@color/ag_text_primary" />
+
+            <Button
+                android:id="@+id/btn_error_retry"
+                style="@style/Widget.Material3.Button"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
+                android:backgroundTint="@color/ag_primary"
+                android:text="@string/error_retry"
+                android:textColor="@color/ag_bg" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/btn_error_dismiss"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/error_dismiss"
+            android:textColor="@color/ag_text_secondary" />
+    </LinearLayout>
+
     <!-- In-app OAuth / Google Sign-In popup overlay -->
     <LinearLayout
         android:id="@+id/popup_container"

@@ -4,7 +4,7 @@
 
 [![Platform](https://img.shields.io/badge/Android-8.0%2B%20(API%2026)-3DDC84?logo=android&logoColor=white)](https://developer.android.com/)
 [![Engine](https://img.shields.io/badge/GeckoView-160-FF7139?logo=firefox&logoColor=white)](https://mozilla.github.io/geckoview/)
-[![Extension](https://img.shields.io/badge/i18n-%E5%86%85%E7%BD%AE%E4%B8%AD%E6%96%87%E6%8F%92%E4%BB%B6%20v1.1.0-2563EB)](#2-%E5%86%85%E7%BD%AE%E4%B8%AD%E6%96%87%E6%B1%89%E5%8C%96%E6%8F%92%E4%BB%B6)
+[![Extension](https://img.shields.io/badge/i18n-%E5%86%85%E7%BD%AE%E4%B8%AD%E6%96%87%E6%8F%92%E4%BB%B6%20v1.1.1-2563EB)](#2-%E5%86%85%E7%BD%AE%E4%B8%AD%E6%96%87%E6%B1%89%E5%8C%96%E6%8F%92%E4%BB%B6)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 基于 **Mozilla GeckoView 160 + 内置 WebExtension** 打造的 Google Antigravity Remote 非官方开源安卓客户端。专为解决手机浏览器使用官方 Remote Control 网页端时的痛点而设计：免重复登录、Google 地区验证不跳出浏览器、内置无损切换的中文界面、全屏沉浸交互，以及退后台切回后运行中会话自动续流。
@@ -45,10 +45,12 @@
   - **上下文与状态卡片**：实时展示当前模型名、四态状态徽标、上下文进度条（`已用 / 上限`、已压缩次数）及累计输入/缓存命中/输出/思考 Token 与步数明细（直读远程网页前端状态，无需改动服务端协议）；
   - **最近活跃会话（前 5 个）快切列表**：优先排序**运行中 / 待确认**会话，展示标题、工作区名称、相对活跃时间与实时状态徽标，点按即可通过 SPA 路由无刷新直切（若路由未挂载则自动保缓存 URL 跳转）；
   - **常用操作网格**：集成 **设备列表 / 返回上页 / 同步刷新 / 中文切换 / 桌面移动 UA 切换 / 更多设置 / 清除缓存（保留登录态）**。
-- **完整系统能力接入**：支持文件上传选择器（SAF）、Web 通知转发、屏幕常亮开关及 `https://antigravity.google.com/*` 深链直达。
+- **完整系统能力接入**：支持文件上传选择器（SAF）、对话附件直存系统「下载」目录（`onExternalResponse`）、Web 通知转发、屏幕常亮开关及 `https://antigravity.google.com/*` 深链直达。
+- **默认隐私与安全加固**：全量启用 HTTPS 网络安全策略（仅允许本机回环 `127.0.0.1`/`localhost`）、禁用系统备份（`allowBackup="false"` 保护 Google 登录 Cookie）、并对外部 `intent://` 跳转做组件与权限裁剪。
 
-### 4. 加载提速与后台断流自愈
-- **冷启动预热、提前建连与网络精简**：在 `AntigravityApp.onCreate()` 预先加载上次连接的远程实例（`/r/...`），关闭 GeckoView 后台跟踪拦截/安全浏览同步与 DoH 探测以减少蜂窝网络 + VPN 下的连接争抢，并通过 `document_start` 提前 `preconnect` 静态 iframe 域名。
+### 4. 加载提速、切网自愈与断流恢复
+- **冷启动预热、防地址污染与网络精简**：在 `AntigravityApp.onCreate()` 预先加载上次连接的远程实例（`/r/...`，自动屏蔽 `?p=onboarding`/`login` 临时引导页以防污染），关闭 GeckoView 后台跟踪拦截/安全浏览同步与 DoH 探测以减少蜂窝网络 + VPN 下的连接争抢，并通过 `document_start` 提前 `preconnect` 静态 iframe 域名。
+- **切网重连、超时提醒与崩溃熔断**：监听 Android `ConnectivityManager.NetworkCallback`，在 Wi-Fi/5G/VPN 切换后自动软唤醒或重载恢复；外层「正在连接到 instance...」超过 `18s` 自动弹出非阻塞重连条，断网/代理拒绝/证书异常提供中文引导兜底页（`onLoadError`），渲染进程连续崩溃（30 秒超过 3 次）自动熔断防死循环。
 - **退后台保活与精准断流恢复**：
   - 保持主会话 `PRIORITY_HIGH` 优先级，主页按返回键调用 `moveTaskToBack(true)` 常驻后台，再次打开瞬时恢复；
   - 切回前台时向页面与 iframe 派发 `online` / `focus` / `visibilitychange` 软唤醒信号，仅在真实内层对话 iframe 且任务确实运行中（`Working` / `执行中`）时按网络状况自适应监控 `4.5s~6.5s`（交互或切路由立即取消），杜绝外层页面与空闲对话误触发整页刷新；
@@ -75,14 +77,14 @@ flowchart LR
 ## 快速上手
 
 ### 方式一：直接下载 APK 安装（推荐）
-1. 前往 [**GitHub Releases**](https://github.com/schau0826-crypto/antigravity-remote-android/releases) 下载 `antigravity-remote-android-v1.1.0-arm64-v8a-debug.apk` 并安装到 Android 手机（要求 Android 8.0+，`arm64-v8a` 架构）。
-2. 在你的电脑端开启 Antigravity Remote Control：
+1. 前往 [**GitHub Releases**](https://github.com/schau0826-crypto/antigravity-remote-android/releases) 下载 `antigravity-remote-android-v1.1.1-arm64-v8a-debug.apk` 并安装到 Android 手机（要求 Android 8.0+，`arm64-v8a` 架构）。
+2. 在你的电脑端开启 Antigravity Remote Control（建议同时在设置里开启 **Keep computer awake** 防止休眠断隧道）：
    - **桌面端**：打开 **Antigravity Desktop** → 进入设置开启 **Remote Control**；
    - **命令行**：在终端执行：
      ```bash
      agy remote-control start
      ```
-3. 确认手机当前网络可正常访问 `antigravity.google.com` 与 `accounts.google.com`，打开 **Antigravity 远程** 完成一次 Google 账号登录即可长期使用。
+3. 确认手机当前网络可正常访问 `antigravity.google.com` 与 `accounts.google.com`，打开 **Antigravity 远程** 完成一次 Google 账号登录即可长期使用。若使用小米（MIUI / HyperOS）等系统，建议把 **Antigravity 远程** 与所用 VPN 应用的省电策略都设为 **「无限制」**，避免锁屏后系统强拆长连接。
 
 ### 自定义汉化词典（无需重新编译）
 点击右侧边缘悬浮条 → **更多设置** → **自定义汉化词典 (JSON 对象)**，填入键值对即可热更新覆盖或扩充词条：
@@ -113,17 +115,30 @@ sdk.dir=/path/to/your/Android/sdk
 ### 2. 运行单测与构建命令
 
 ```bash
-# 运行内置 WebExtension JS 单元测试（29 项）
+# 运行内置 WebExtension JS 单元测试（30 项）
 node --test tests/i18n.test.mjs
 
 # 运行 Android JVM 单元测试并构建 arm64-v8a Debug APK
 ./gradlew testDebugUnitTest assembleDebug
+
+# 构建开启 R8 压缩优化的 Release APK（配置本地 keystore.properties 或 AG_KEYSTORE_* 环境变量即可自动签名）
+./gradlew assembleRelease
 
 # 构建包含全部 ABI 的通用 APK（包体更大）
 ./gradlew -Puniversal=true assembleDebug
 
 # 通过 ADB 安装到已连接的手机
 adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+### 3. 可选固定 Release 签名（`keystore.properties`）
+可在项目根目录创建 `keystore.properties`（默认已被 `.gitignore` 忽略，不会提交到 Git）或配置环境变量 `AG_KEYSTORE_PATH`、`AG_KEYSTORE_PASSWORD`、`AG_KEY_ALIAS`、`AG_KEY_PASSWORD`：
+
+```properties
+storeFile=/path/to/release.keystore
+storePassword=your-store-password
+keyAlias=your-alias
+keyPassword=your-key-password
 ```
 
 ---

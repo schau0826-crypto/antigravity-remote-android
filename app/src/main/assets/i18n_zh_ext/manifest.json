@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Antigravity Remote 中文汉化",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Built-in Simplified Chinese UI localization, mobile polish, and foreground stream recovery for Google Antigravity Remote Control.",
   "browser_specific_settings": {
     "gecko": {

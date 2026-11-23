@@ -248,7 +248,7 @@ test("manifest.json follows MV2 GeckoView built-in WebExtension contract", () =>
   const manifest = JSON.parse(manifestRaw);
 
   assert.equal(manifest.manifest_version, 2);
-  assert.equal(manifest.version, "1.1.0");
+  assert.equal(manifest.version, "1.1.1");
   assert.equal(manifest.browser_specific_settings?.gecko?.id, "ag-remote-zh@agremote.local");
 
   for (const perm of [
@@ -876,7 +876,7 @@ test("background.js and content.js wire native port READY, CONFIG_UPDATE, and ST
   vm.runInContext(bgSource, bgCtx);
 
   assert.equal(connectedAppId, "ag_remote_i18n");
-  assert.deepEqual(nativeMessagesSent[0], { type: "READY", version: "1.1.0" });
+  assert.deepEqual(nativeMessagesSent[0], { type: "READY", version: "1.1.1" });
 
   // Simulate Android -> Extension CONFIG_UPDATE
   for (const fn of portMessageListeners) {
@@ -2003,4 +2003,41 @@ test("session_probe.js switchConversationAsync verifies async router.navigate re
     ""
   );
   assert.deepEqual(noopRes, { switched: false, method: "router_error", error: "location_unchanged" });
+});
+
+test("background.js handles FRAME_UNLOAD cleanly and recomputes total translated STATS", async () => {
+  const bgSource = fs.readFileSync(path.join(EXT_DIR, "background.js"), "utf8");
+  const nativeMessages = [];
+  let runtimeListener = null;
+
+  const mockPort = {
+    postMessage(msg) { nativeMessages.push(JSON.parse(JSON.stringify(msg))); },
+    onMessage: { addListener() {} },
+    onDisconnect: { addListener() {} },
+    disconnect() {}
+  };
+
+  const bgCtx = {
+    browser: {
+      runtime: {
+        connectNative: () => mockPort,
+        onMessage: { addListener: (fn) => { runtimeListener = fn; } }
+      },
+      storage: { local: { async get() { return { enabled: true, customDict: {} }; }, async set() {} } },
+      tabs: { async query() { return []; }, onRemoved: { addListener() {} } }
+    },
+    Map, Object, Array, String, Number, Boolean, Promise, JSON, Math, setTimeout, clearTimeout
+  };
+  vm.createContext(bgCtx);
+  vm.runInContext(bgSource, bgCtx);
+
+  assert.equal(typeof runtimeListener, "function");
+  await runtimeListener({ type: "STATS", translatedCount: 10 }, { tab: { id: 1 }, frameId: 0 });
+  await runtimeListener({ type: "STATS", translatedCount: 25 }, { tab: { id: 1 }, frameId: 9 });
+  assert.equal(nativeMessages.at(-1).translatedCount, 35);
+
+  // Unloading frameId=9 drops stale count back to 10
+  await runtimeListener({ type: "FRAME_UNLOAD" }, { tab: { id: 1 }, frameId: 9 });
+  assert.equal(nativeMessages.at(-1).type, "STATS");
+  assert.equal(nativeMessages.at(-1).translatedCount, 10);
 });

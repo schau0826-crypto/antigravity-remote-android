@@ -1,6 +1,7 @@
 package com.agremote.android
 
 import java.net.URI
+import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.Locale
@@ -99,7 +100,64 @@ object UrlPolicy {
         } catch (_: Exception) {
             ""
         }
-        return path.startsWith("/r/") && path.length > 3
+        if (!path.startsWith("/r/") || path.length <= 3) {
+            return false
+        }
+        val rawQuery = runCatching { URI(url).rawQuery }.getOrNull()
+            ?: url.substringAfter('?', "").substringBefore('#').takeIf { it.isNotEmpty() }
+        val innerTarget = extractQueryParam(rawQuery, "p")
+        if (!innerTarget.isNullOrBlank()) {
+            val innerPath = innerTarget
+                .trim()
+                .trimStart('/')
+                .substringBefore('?')
+                .substringBefore('#')
+                .lowercase(Locale.ROOT)
+            if (
+                innerPath == "onboarding" ||
+                innerPath.startsWith("onboarding/") ||
+                innerPath == "login" ||
+                innerPath.startsWith("login/")
+            ) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private fun extractQueryParam(rawQuery: String?, key: String): String? {
+        if (rawQuery.isNullOrBlank()) return null
+        val prefix = "$key="
+        for (pair in rawQuery.split('&')) {
+            if (pair.startsWith(prefix)) {
+                val rawValue = pair.substring(prefix.length)
+                return runCatching {
+                    URLDecoder.decode(rawValue, StandardCharsets.UTF_8.name())
+                }.getOrNull() ?: rawValue
+            }
+        }
+        return null
+    }
+
+    private val BLOCKED_INTENT_SCHEMES = setOf(
+        "javascript",
+        "vbscript",
+        "file",
+        "content",
+        "data",
+        "android-app",
+        "about",
+        "intent"
+    )
+
+    private val VALID_EXTERNAL_SCHEME_REGEX = Regex("^[a-z][a-z0-9+.-]{1,31}$")
+
+    fun isSafeExternalIntentScheme(scheme: String?): Boolean {
+        val normalized = scheme?.trim()?.lowercase(Locale.ROOT).orEmpty()
+        if (normalized.isEmpty() || normalized in BLOCKED_INTENT_SCHEMES) {
+            return false
+        }
+        return VALID_EXTERNAL_SCHEME_REGEX.matches(normalized)
     }
 
     fun buildRemoteConversationUrl(

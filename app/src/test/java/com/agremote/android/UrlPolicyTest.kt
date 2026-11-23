@@ -138,8 +138,28 @@ class UrlPolicyTest {
         assertTrue(UrlPolicy.isRememberableRemoteUrl("https://antigravity.google/r/example-machine"))
         assertFalse(UrlPolicy.isRememberableRemoteUrl("https://antigravity.google.com/"))
         assertFalse(UrlPolicy.isRememberableRemoteUrl("https://antigravity.google.com/r/"))
+        assertFalse(UrlPolicy.isRememberableRemoteUrl("https://antigravity.google.com/r/example-machine?p=onboarding%3Flogin%3Dtrue"))
+        assertFalse(UrlPolicy.isRememberableRemoteUrl("https://antigravity.google.com/r/example-machine?p=%2Flogin"))
+        assertTrue(UrlPolicy.isRememberableRemoteUrl("https://antigravity.google.com/r/example-machine?p=c%2Fcid-123%3Fproject%3Doutside-of-project"))
         assertFalse(UrlPolicy.isRememberableRemoteUrl("https://accounts.google.com/ServiceLogin"))
         assertFalse(UrlPolicy.isRememberableRemoteUrl("https://antigravity.static.usercontent.goog/web/2.34.0/"))
+    }
+
+    @Test
+    fun `validates safe external intent schemes cleanly`() {
+        assertTrue(UrlPolicy.isSafeExternalIntentScheme("mailto"))
+        assertTrue(UrlPolicy.isSafeExternalIntentScheme("TEL"))
+        assertTrue(UrlPolicy.isSafeExternalIntentScheme("https"))
+        assertTrue(UrlPolicy.isSafeExternalIntentScheme("market"))
+
+        assertFalse(UrlPolicy.isSafeExternalIntentScheme(null))
+        assertFalse(UrlPolicy.isSafeExternalIntentScheme(""))
+        assertFalse(UrlPolicy.isSafeExternalIntentScheme("javascript"))
+        assertFalse(UrlPolicy.isSafeExternalIntentScheme("file"))
+        assertFalse(UrlPolicy.isSafeExternalIntentScheme("content"))
+        assertFalse(UrlPolicy.isSafeExternalIntentScheme("data"))
+        assertFalse(UrlPolicy.isSafeExternalIntentScheme("android-app"))
+        assertFalse(UrlPolicy.isSafeExternalIntentScheme("intent"))
     }
 
     @Test

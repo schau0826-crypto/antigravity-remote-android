@@ -4,7 +4,7 @@ English | [简体中文](README.zh-CN.md)
 
 [![Platform](https://img.shields.io/badge/Android-8.0%2B%20(API%2026)-3DDC84?logo=android&logoColor=white)](https://developer.android.com/)
 [![Engine](https://img.shields.io/badge/GeckoView-160-FF7139?logo=firefox&logoColor=white)](https://mozilla.github.io/geckoview/)
-[![Extension](https://img.shields.io/badge/i18n-Built--in%20%E4%B8%AD%E6%96%87%20v1.1.0-2563EB)](#built-in-chinese-localization-plugin)
+[![Extension](https://img.shields.io/badge/i18n-Built--in%20%E4%B8%AD%E6%96%87%20v1.1.1-2563EB)](#built-in-chinese-localization-plugin)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 An unofficial, open-source Android client for **Google Antigravity Remote Control**, built on **Mozilla GeckoView 160** and a bundled **WebExtension** (`ag-remote-zh@agremote.local`). It solves the everyday pain points of using the official mobile web dashboard—persistent sign-in, OAuth redirect handling, built-in Simplified Chinese UI localization, full-screen ergonomics, and background-resume stream recovery.
@@ -44,10 +44,12 @@ An unofficial, open-source Android client for **Google Antigravity Remote Contro
   - **Context & Telemetry Card**: Shows the active model, 4-state status badge, context window progress bar (`used / limit`, compaction count), and cumulative token/cache breakdown (`input`, `cache hit %`, `output`, `thinking`, `steps`) read directly from the live remote web session (`session_probe.js`).
   - **Recent Active Conversations (Top 5)**: Prioritizes `Running` and `Waiting` sessions ahead of recent idle threads with workspace & relative-time metadata; tap any row for instant in-app SPA route switching (with cache-preserving URL fallback).
   - **Quick Controls**: **Devices List**, **Back**, **Sync/Reload**, **中文 / EN**, **Desktop / Mobile UA**, **Settings**, and **Clear Cache** (preserving login cookies).
-- **Native System Integration**: Supports Android file picker uploads (`PromptDelegate`), Web Notifications forwarding, keep-screen-on toggle, and `https://antigravity.google.com/*` deep links.
+- **Native System Integration**: Supports Android file picker uploads (`PromptDelegate`), direct attachment downloads to the system **Downloads** folder (`onExternalResponse`), Web Notifications forwarding, keep-screen-on toggle, and `https://antigravity.google.com/*` deep links.
+- **Security Hardening**: Enforces HTTPS by default (allowing cleartext only on `127.0.0.1` / `localhost`), disables cloud/ADB backup of session cookies (`allowBackup="false"`), and sanitizes external `intent://` handoffs.
 
-### 4. Speed & Background Stream Recovery
-- **Cold-Start Pre-Warming & Early Preconnect**: Initializes and loads your last connected remote machine (`/r/...`) during `Application.onCreate()`, disables GeckoView SafeBrowsing/tracking list sync & DoH probing (to avoid background VPN contention), and injects `document_start` `<link rel="preconnect">` hints for static iframe origins.
+### 4. Speed, Network Switch Resilience & Recovery
+- **Cold-Start Pre-Warming & Early Preconnect**: Initializes and loads your last connected remote machine (`/r/...`, excluding transient `?p=onboarding` / `login` redirects) during `Application.onCreate()`, disables GeckoView SafeBrowsing/tracking list sync & DoH probing (to avoid background VPN contention), and injects `document_start` `<link rel="preconnect">` hints for static iframe origins.
+- **Network Switch, Instance Timeout & Error Fallback**: Listens to Android `ConnectivityManager.NetworkCallback` to soft-wake and recover after Wi-Fi/5G/VPN switches; surfaces a non-blocking quick-reconnect banner if an outer instance handshake exceeds `18s`, shows a localized Chinese fallback screen on network/proxy/SSL errors (`onLoadError`), and protects `onCrash`/`onKill` recovery with a 3-in-30s circuit breaker.
 - **Foreground Wake & Precision Stall Detector**: Keeps the primary session at `PRIORITY_HIGH`, dispatches `online` / `focus` / `visibilitychange` on return from background, and watches only the inner workspace iframe (`4.5s–6.5s` adaptive window) while a task is actively running (`Working` / `执行中`). Cancels immediately on user interaction or route changes; if genuinely stalled without an unsent draft, re-syncs without bypassing fresh static caches.
 
 ---
@@ -71,14 +73,14 @@ flowchart LR
 ## Quick Start
 
 ### Option A: Install Prebuilt APK (Recommended)
-1. Download `antigravity-remote-android-v1.1.0-arm64-v8a-debug.apk` from [**GitHub Releases**](https://github.com/schau0826-crypto/antigravity-remote-android/releases) and install it on your Android phone (Android 8.0+, `arm64-v8a`).
-2. On your computer, enable Antigravity Remote Control:
+1. Download `antigravity-remote-android-v1.1.1-arm64-v8a-debug.apk` from [**GitHub Releases**](https://github.com/schau0826-crypto/antigravity-remote-android/releases) and install it on your Android phone (Android 8.0+, `arm64-v8a`).
+2. On your computer, enable Antigravity Remote Control (and enable **Keep computer awake** if monitoring long tasks):
    - **Desktop App**: Open **Antigravity Desktop** → **Settings** → enable **Remote Control**, or
    - **CLI**: Run:
      ```bash
      agy remote-control start
      ```
-3. Ensure your phone can reach `antigravity.google.com` and `accounts.google.com`, open **Antigravity 远程**, and sign in with your Google account once.
+3. Ensure your phone can reach `antigravity.google.com` and `accounts.google.com`, open **Antigravity 远程**, and sign in with your Google account once. On MIUI / HyperOS / ColorOS phones, set battery saver to **No restrictions (无限制)** for both **Antigravity 远程** and your VPN app so background/lockscreen doesn't tear down active TCP sockets.
 
 ### Customizing Translations (No Rebuild Required)
 Tap the **right-edge floating handle** → **更多设置 (Settings)** → **自定义汉化词典 (Custom Dictionary JSON)** and enter any key-value overrides:
@@ -111,17 +113,30 @@ sdk.dir=/path/to/your/Android/sdk
 ### 2. Run Tests & Build APK
 
 ```bash
-# Run WebExtension JS unit tests (29 tests)
+# Run WebExtension JS unit tests (30 tests)
 node --test tests/i18n.test.mjs
 
 # Run Android JVM unit tests & build arm64-v8a Debug APK
 ./gradlew testDebugUnitTest assembleDebug
+
+# Build R8-minified Release APK (configure local keystore.properties or AG_KEYSTORE_* env vars to sign)
+./gradlew assembleRelease
 
 # Build a universal multi-ABI APK (larger size)
 ./gradlew -Puniversal=true assembleDebug
 
 # Install directly over ADB
 adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+### 3. Optional Release Signing (`keystore.properties`)
+Keep your signing credentials outside Git by creating a root `keystore.properties` (gitignored) or passing `AG_KEYSTORE_PATH`, `AG_KEYSTORE_PASSWORD`, `AG_KEY_ALIAS`, and `AG_KEY_PASSWORD`:
+
+```properties
+storeFile=/path/to/release.keystore
+storePassword=your-store-password
+keyAlias=your-alias
+keyPassword=your-key-password
 ```
 
 ---

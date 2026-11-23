@@ -49,4 +49,15 @@
     <string name="settings_clear_cache">清除网页缓存并刷新（保留登录态）</string>
     <string name="cache_cleared_toast">已清除缓存并刷新（登录状态已保留）</string>
     <string name="external_browser_error">未找到可打开外部链接的应用</string>
+    <string name="reconnect_banner_title">连接电脑实例超时，可能因电脑刚重启或网络切换</string>
+    <string name="reconnect_banner_retry">立即重连</string>
+    <string name="reconnect_banner_devices">设备列表</string>
+    <string name="error_retry">重试连接</string>
+    <string name="error_go_home">设备列表</string>
+    <string name="error_dismiss">关闭</string>
+    <string name="crash_loop_title">页面渲染进程连续异常</string>
+    <string name="crash_loop_detail">已暂停自动重载以防循环重启。请尝试返回设备列表或稍后重试。</string>
+    <string name="download_started">正在下载 %1$s…</string>
+    <string name="download_saved">已保存到下载目录：%1$s</string>
+    <string name="download_failed">下载失败：%1$s</string>
 </resources>

@@ -607,6 +607,29 @@
     });
   }
 
+  function handleFrameUnload() {
+    stopStallWatch();
+    if (snapshotIntervalId !== null && typeof clearInterval === "function") {
+      clearInterval(snapshotIntervalId);
+      snapshotIntervalId = null;
+    }
+    for (let i = 0; i < switchRefreshTimers.length; i++) {
+      clearTimeout(switchRefreshTimers[i]);
+    }
+    switchRefreshTimers = [];
+    if (typeof browser !== "undefined" && browser.runtime && typeof browser.runtime.sendMessage === "function") {
+      browser.runtime.sendMessage({ type: "FRAME_UNLOAD" }).catch(() => {});
+    }
+  }
+
+  if (typeof rootScope.addEventListener === "function") {
+    try {
+      rootScope.addEventListener("pagehide", handleFrameUnload, { once: true });
+    } catch (_err) {
+      // Ignore in restricted environments
+    }
+  }
+
   async function init() {
     const initial = await fetchInitialConfig();
     applyConfig(initial);

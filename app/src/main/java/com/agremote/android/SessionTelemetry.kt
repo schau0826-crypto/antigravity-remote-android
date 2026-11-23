@@ -57,23 +57,26 @@ data class SessionSnapshot(
     val currentConversationId: String = "",
     val context: ContextTelemetry? = null,
     val recentConversations: List<RecentConversationItem> = emptyList(),
-    val updatedAtMs: Long = 0L
+    val updatedAtMs: Long = 0L,
+    val hasStore: Boolean = false
 )
 
 object SessionTelemetryParser {
     private const val MAX_RECENT_CONVERSATIONS = 5
 
     fun parseSnapshot(json: JSONObject): SessionSnapshot {
-        val currentCid = json.optString("currentConversationId", "").trim()
+        val currentCid = json.optString("currentConversationId", "")?.trim().orEmpty()
         val ctxObj = json.optJSONObject("context")
         val context = if (ctxObj != null) parseContext(ctxObj) else null
         val recents = parseRecentConversations(json.optJSONArray("recentConversations"))
         val updatedAtMs = json.optLong("updatedAtMs", 0L).coerceAtLeast(0L)
+        val hasStore = json.optJSONObject("probeMeta")?.optBoolean("hasStore", false) ?: false
         return SessionSnapshot(
             currentConversationId = currentCid,
             context = context,
             recentConversations = recents,
-            updatedAtMs = updatedAtMs
+            updatedAtMs = updatedAtMs,
+            hasStore = hasStore
         )
     }
 

@@ -1,6 +1,10 @@
 package com.agremote.android
 
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SessionTelemetryTest {
@@ -39,5 +43,40 @@ class SessionTelemetryTest {
         assertEquals("2 小时前", SessionTelemetryParser.formatRelativeTime(now - 2L * 3_600_000L, now))
         assertEquals("昨天", SessionTelemetryParser.formatRelativeTime(now - 30L * 3_600_000L, now))
         assertEquals("3 天前", SessionTelemetryParser.formatRelativeTime(now - 3L * 86_400_000L, now))
+    }
+
+    private fun fakeSnapshotJson(currentCid: String, hasStoreMeta: Boolean?): JSONObject {
+        val metaObj = if (hasStoreMeta != null) {
+            object : JSONObject() {
+                override fun optBoolean(name: String?, fallback: Boolean): Boolean =
+                    if (name == "hasStore") hasStoreMeta else fallback
+            }
+        } else {
+            null
+        }
+        return object : JSONObject() {
+            override fun optString(name: String?, fallback: String): String =
+                if (name == "currentConversationId") currentCid else fallback
+
+            override fun optJSONObject(name: String?): JSONObject? =
+                if (name == "probeMeta") metaObj else null
+
+            override fun optJSONArray(name: String?): JSONArray? = null
+
+            override fun optLong(name: String?, fallback: Long): Long = 0L
+        }
+    }
+
+    @Test
+    fun `parses hasStore probe metadata flag safely`() {
+        val withStore = SessionTelemetryParser.parseSnapshot(fakeSnapshotJson("c1", true))
+        assertEquals("c1", withStore.currentConversationId)
+        assertTrue(withStore.hasStore)
+
+        val withoutStore = SessionTelemetryParser.parseSnapshot(fakeSnapshotJson("c1", false))
+        assertFalse(withoutStore.hasStore)
+
+        val missingMeta = SessionTelemetryParser.parseSnapshot(fakeSnapshotJson("c1", null))
+        assertFalse(missingMeta.hasStore)
     }
 }

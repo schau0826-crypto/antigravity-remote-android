@@ -3,16 +3,22 @@ package com.agremote.android
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
+import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Typeface
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.provider.MediaStore
 import android.text.Editable
 import android.text.TextWatcher
 import android.util.Log
@@ -53,6 +59,11 @@ import org.mozilla.geckoview.GeckoSession.PromptDelegate
 import org.mozilla.geckoview.GeckoSessionSettings
 import org.mozilla.geckoview.GeckoView
 import org.mozilla.geckoview.StorageController
+import org.mozilla.geckoview.WebResponse
+import org.mozilla.geckoview.WebRequestError
+import java.io.File
+import java.io.FileOutputStream
+import java.util.concurrent.Executors
 import kotlin.math.abs
 
 class MainActivity : AppCompatActivity() {
@@ -70,6 +81,16 @@ class MainActivity : AppCompatActivity() {
     private lateinit var fabQuickMenu: FrameLayout
     private lateinit var viewFabStatusDot: View
     private lateinit var tvFabCtxPct: TextView
+    private lateinit var layoutReconnectBanner: LinearLayout
+    private lateinit var btnBannerReconnect: Button
+    private lateinit var btnBannerDevices: Button
+    private lateinit var btnBannerDismiss: Button
+    private lateinit var layoutErrorOverlay: LinearLayout
+    private lateinit var tvErrorTitle: TextView
+    private lateinit var tvErrorDetail: TextView
+    private lateinit var btnErrorRetry: Button
+    private lateinit var btnErrorHome: Button
+    private lateinit var btnErrorDismiss: Button
 
     private lateinit var popupContainer: LinearLayout
     private lateinit var popupTitle: TextView
@@ -98,6 +119,66 @@ class MainActivity : AppCompatActivity() {
     private var switchCounter = 0
     private var pendingSwitchRequestId: String? = null
     private var pendingSwitchFallbackRunnable: Runnable? = null
+
+    private val crashRecoveryGuard = CrashRecoveryGuard(maxCrashes = 3, windowMs = 30_000L)
+    private val downloadExecutor = Executors.newSingleThreadExecutor()
+    private var isWaitingForRemoteInstance = false
+    private var lastFailedUrl: String? = null
+    private var connectivityManager: ConnectivityManager? = null
+    private var networkCallbackRegistered = false
+    private var lastNetworkSignature: String? = null
+    private var wasNetworkLost = false
+
+    private val instanceConnectWatchRunnable = Runnable {
+        if (
+            !isFinishing &&
+            !isDestroyed &&
+            isWaitingForRemoteInstance &&
+            UrlPolicy.isRememberableRemoteUrl(currentUrl) &&
+            layoutErrorOverlay.visibility != View.VISIBLE &&
+            popupContainer.visibility != View.VISIBLE
+        ) {
+            layoutReconnectBanner.visibility = View.VISIBLE
+        }
+    }
+
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onLost(network: Network) {
+            wasNetworkLost = true
+        }
+
+        override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+            if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                return
+            }
+            val hasVpn = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+            val hasWifi = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+            val hasCell = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+            val sig = "${network.networkHandle}:$hasVpn:$hasWifi:$hasCell"
+            mainHandler.post {
+                if (isFinishing || isDestroyed) return@post
+                val prevSig = lastNetworkSignature
+                val changed = wasNetworkLost || (prevSig != null && prevSig != sig)
+                lastNetworkSignature = sig
+                wasNetworkLost = false
+                if (!changed) return@post
+
+                app.extensionBridge.sendAppResumed(0L)
+                val shouldAutoRecover =
+                    layoutErrorOverlay.visibility == View.VISIBLE ||
+                        (layoutReconnectBanner.visibility == View.VISIBLE && currentSettings.autoReconnectOnResume)
+                if (shouldAutoRecover) {
+                    val now = System.currentTimeMillis()
+                    if (now - lastAutoReconnectAtMs >= 10_000L) {
+                        lastAutoReconnectAtMs = now
+                        hideErrorOverlay()
+                        hideReconnectBanner()
+                        reloadCurrentTargetPreservingCache()
+                    }
+                }
+            }
+        }
+    }
 
     private data class QuickSheetTelemetryViews(
         val cardContextTelemetry: LinearLayout,
@@ -179,6 +260,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val snapshotListener: (SessionSnapshot) -> Unit = { snapshot ->
+        if (snapshot.hasStore || snapshot.recentConversations.isNotEmpty() || snapshot.context != null) {
+            cancelInstanceConnectWatch()
+            crashRecoveryGuard.reset()
+        }
         updateFloatingHandleTelemetry(snapshot)
         renderQuickSheetTelemetry(snapshot)
     }
@@ -191,12 +276,14 @@ class MainActivity : AppCompatActivity() {
         runtime = app.ensureRuntime()
         settingsStore = app.settingsStore
         currentSettings = settingsStore.load()
+        connectivityManager = getSystemService(ConnectivityManager::class.java)
 
         bindViews()
         setupInsets()
         syncSystemBarsAppearance(resources.configuration)
         setupFloatingHandle()
         setupLoadingOverlay()
+        setupReconnectAndErrorOverlays()
         setupBackNavigation()
 
         app.extensionBridge.addListener(bridgeListener)
@@ -224,9 +311,15 @@ class MainActivity : AppCompatActivity() {
 
             if (deepLinkUrl != null && deepLinkUrl != prewarmed.url) {
                 currentUrl = deepLinkUrl
+                if (UrlPolicy.isRememberableRemoteUrl(deepLinkUrl)) {
+                    armInstanceConnectWatch()
+                }
                 primarySession.loadUri(deepLinkUrl)
             } else {
                 currentUrl = prewarmed.url
+                if (UrlPolicy.isRememberableRemoteUrl(currentUrl) && !app.extensionBridge.latestSnapshot.hasStore) {
+                    armInstanceConnectWatch()
+                }
                 if (prewarmed.firstPaintSeen || prewarmed.pageStopped || prewarmed.progress >= 75) {
                     dismissLoadingOverlay(immediate = true)
                 }
@@ -236,6 +329,9 @@ class MainActivity : AppCompatActivity() {
 
         val startupUrl = deepLinkUrl ?: SettingsStore.resolveStartupUrl(currentSettings)
         currentUrl = startupUrl
+        if (UrlPolicy.isRememberableRemoteUrl(startupUrl)) {
+            armInstanceConnectWatch()
+        }
         primarySession = createConfiguredSession(currentSettings)
         attachDelegates(primarySession, isPopup = false)
         primarySession.setPriorityHint(GeckoSession.PRIORITY_HIGH)
@@ -246,6 +342,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        registerNetworkCallback()
         if (::primarySession.isInitialized && primarySession.isOpen) {
             primarySession.setPriorityHint(GeckoSession.PRIORITY_HIGH)
             primarySession.setActive(true)
@@ -276,6 +373,7 @@ class MainActivity : AppCompatActivity() {
     override fun onStop() {
         super.onStop()
         lastBackgroundAtMs = System.currentTimeMillis()
+        unregisterNetworkCallback()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -283,7 +381,14 @@ class MainActivity : AppCompatActivity() {
         setIntent(intent)
         val deepLinkUrl = extractDeepLinkUrl(intent) ?: return
         closePopupSession()
+        hideErrorOverlay()
+        hideReconnectBanner()
         currentUrl = deepLinkUrl
+        if (UrlPolicy.isRememberableRemoteUrl(deepLinkUrl)) {
+            armInstanceConnectWatch()
+        } else {
+            cancelInstanceConnectWatch()
+        }
         primarySession.loadUri(deepLinkUrl)
     }
 
@@ -296,7 +401,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         mainHandler.removeCallbacks(retryPromptRunnable)
+        cancelInstanceConnectWatch()
+        unregisterNetworkCallback()
         clearPendingSwitchFallback()
+        downloadExecutor.shutdownNow()
         app.extensionBridge.onStreamStalledListener = null
         app.extensionBridge.onSwitchResultListener = null
         app.extensionBridge.removeListener(bridgeListener)
@@ -336,6 +444,16 @@ class MainActivity : AppCompatActivity() {
         fabQuickMenu = findViewById(R.id.fab_quick_menu)
         viewFabStatusDot = findViewById(R.id.view_fab_status_dot)
         tvFabCtxPct = findViewById(R.id.tv_fab_ctx_pct)
+        layoutReconnectBanner = findViewById(R.id.layout_reconnect_banner)
+        btnBannerReconnect = findViewById(R.id.btn_banner_reconnect)
+        btnBannerDevices = findViewById(R.id.btn_banner_devices)
+        btnBannerDismiss = findViewById(R.id.btn_banner_dismiss)
+        layoutErrorOverlay = findViewById(R.id.layout_error_overlay)
+        tvErrorTitle = findViewById(R.id.tv_error_title)
+        tvErrorDetail = findViewById(R.id.tv_error_detail)
+        btnErrorRetry = findViewById(R.id.btn_error_retry)
+        btnErrorHome = findViewById(R.id.btn_error_home)
+        btnErrorDismiss = findViewById(R.id.btn_error_dismiss)
 
         popupContainer = findViewById(R.id.popup_container)
         popupTitle = findViewById(R.id.popup_title)
@@ -381,6 +499,123 @@ class MainActivity : AppCompatActivity() {
             mainHandler.removeCallbacks(retryPromptRunnable)
             mainHandler.postDelayed(retryPromptRunnable, 8000L)
             primarySession.reload()
+        }
+    }
+
+    private fun setupReconnectAndErrorOverlays() {
+        btnBannerReconnect.setOnClickListener {
+            hideReconnectBanner()
+            reloadCurrentTargetPreservingCache()
+        }
+        btnBannerDevices.setOnClickListener {
+            cancelInstanceConnectWatch()
+            app.extensionBridge.resetSessionState()
+            currentUrl = currentSettings.homeUrl
+            primarySession.loadUri(currentSettings.homeUrl)
+        }
+        btnBannerDismiss.setOnClickListener {
+            cancelInstanceConnectWatch()
+        }
+
+        btnErrorRetry.setOnClickListener {
+            hideErrorOverlay()
+            reloadCurrentTargetPreservingCache()
+        }
+        btnErrorHome.setOnClickListener {
+            hideErrorOverlay()
+            cancelInstanceConnectWatch()
+            lastFailedUrl = null
+            app.extensionBridge.resetSessionState()
+            currentUrl = currentSettings.homeUrl
+            primarySession.loadUri(currentSettings.homeUrl)
+        }
+        btnErrorDismiss.setOnClickListener {
+            hideErrorOverlay()
+        }
+    }
+
+    private fun isStaticWorkspaceHost(url: String?): Boolean {
+        val host = UrlPolicy.extractHost(url.orEmpty())
+        return host == "antigravity.static.usercontent.goog" || host?.endsWith(".usercontent.goog") == true
+    }
+
+    private fun isRemoteContextUrl(url: String?): Boolean {
+        return UrlPolicy.isRememberableRemoteUrl(url) || isStaticWorkspaceHost(url)
+    }
+
+    private fun armInstanceConnectWatch() {
+        isWaitingForRemoteInstance = true
+        mainHandler.removeCallbacks(instanceConnectWatchRunnable)
+        mainHandler.postDelayed(instanceConnectWatchRunnable, 18_000L)
+    }
+
+    private fun cancelInstanceConnectWatch() {
+        isWaitingForRemoteInstance = false
+        mainHandler.removeCallbacks(instanceConnectWatchRunnable)
+        if (::layoutReconnectBanner.isInitialized) {
+            layoutReconnectBanner.visibility = View.GONE
+        }
+    }
+
+    private fun hideReconnectBanner() {
+        if (::layoutReconnectBanner.isInitialized) {
+            layoutReconnectBanner.visibility = View.GONE
+        }
+    }
+
+    private fun showErrorOverlay(title: String, detail: String) {
+        dismissLoadingOverlay(immediate = true)
+        cancelInstanceConnectWatch()
+        tvErrorTitle.text = title
+        tvErrorDetail.text = detail
+        layoutErrorOverlay.visibility = View.VISIBLE
+    }
+
+    private fun hideErrorOverlay() {
+        if (::layoutErrorOverlay.isInitialized) {
+            layoutErrorOverlay.visibility = View.GONE
+        }
+    }
+
+    private fun reloadCurrentTargetPreservingCache() {
+        val target = when {
+            UrlPolicy.isRememberableRemoteUrl(currentUrl) -> currentUrl
+            !lastFailedUrl.isNullOrBlank() && UrlPolicy.classify(lastFailedUrl) == UrlAction.IN_APP -> lastFailedUrl!!
+            else -> null
+        }
+        if (target != null) {
+            if (UrlPolicy.isRememberableRemoteUrl(target)) {
+                armInstanceConnectWatch()
+            }
+            primarySession.load(
+                GeckoSession.Loader()
+                    .uri(target)
+                    .flags(GeckoSession.LOAD_FLAGS_REPLACE_HISTORY)
+            )
+        } else {
+            if (isRemoteContextUrl(currentUrl)) {
+                armInstanceConnectWatch()
+            }
+            primarySession.reload()
+        }
+    }
+
+    private fun registerNetworkCallback() {
+        val cm = connectivityManager ?: return
+        if (networkCallbackRegistered) return
+        runCatching {
+            cm.registerDefaultNetworkCallback(networkCallback)
+            networkCallbackRegistered = true
+        }.onFailure { err ->
+            Log.w(TAG, "Unable to register default network callback", err)
+        }
+    }
+
+    private fun unregisterNetworkCallback() {
+        if (!networkCallbackRegistered) return
+        networkCallbackRegistered = false
+        runCatching {
+            connectivityManager?.unregisterNetworkCallback(networkCallback)
         }
     }
 
@@ -587,6 +822,10 @@ class MainActivity : AppCompatActivity() {
         tileHome.setOnClickListener {
             sheet.dismiss()
             closePopupSession()
+            hideErrorOverlay()
+            cancelInstanceConnectWatch()
+            app.extensionBridge.resetSessionState()
+            currentUrl = currentSettings.homeUrl
             primarySession.loadUri(currentSettings.homeUrl)
         }
 
@@ -959,8 +1198,27 @@ class MainActivity : AppCompatActivity() {
                     if (UrlPolicy.isRememberableRemoteUrl(safeUrl)) {
                         settingsStore.saveLastRemoteUrl(safeUrl)
                         currentSettings = currentSettings.copy(lastRemoteUrl = safeUrl)
+                        if (!app.extensionBridge.latestSnapshot.hasStore) {
+                            armInstanceConnectWatch()
+                        }
+                    } else if (!isStaticWorkspaceHost(safeUrl) && !safeUrl.contains("onboarding", ignoreCase = true)) {
+                        cancelInstanceConnectWatch()
+                        app.extensionBridge.resetSessionState()
                     }
                 }
+            }
+
+            override fun onLoadError(
+                session: GeckoSession,
+                uri: String?,
+                error: WebRequestError
+            ): GeckoResult<String>? {
+                if (!isPopup && !uri.isNullOrBlank() && !uri.startsWith("about:") && UrlPolicy.classify(uri) == UrlAction.IN_APP) {
+                    lastFailedUrl = uri
+                    val copy = LoadErrorFormatter.format(error.code, error.category, UrlPolicy.extractHost(uri))
+                    showErrorOverlay(copy.title, copy.detail)
+                }
+                return GeckoResult.fromValue(null)
             }
 
             override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
@@ -1037,6 +1295,7 @@ class MainActivity : AppCompatActivity() {
             override fun onFirstContentfulPaint(session: GeckoSession) {
                 if (!isPopup && primaryHasNonBlankLocation) {
                     dismissLoadingOverlay()
+                    hideErrorOverlay()
                 }
             }
 
@@ -1050,6 +1309,10 @@ class MainActivity : AppCompatActivity() {
                 if (isPopup || session === popupSession) {
                     closePopupSession()
                 }
+            }
+
+            override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
+                handleExternalDownloadResponse(response)
             }
 
             override fun onCrash(session: GeckoSession) {
@@ -1070,6 +1333,13 @@ class MainActivity : AppCompatActivity() {
                 if (!isPopup) {
                     if (!url.startsWith("about:")) {
                         primaryHasNonBlankLocation = true
+                        hideErrorOverlay()
+                        hideReconnectBanner()
+                        if (isRemoteContextUrl(url)) {
+                            armInstanceConnectWatch()
+                        } else {
+                            cancelInstanceConnectWatch()
+                        }
                     }
                     pageProgress.visibility = View.VISIBLE
                     pageProgress.progress = 15
@@ -1091,6 +1361,9 @@ class MainActivity : AppCompatActivity() {
                     pageProgress.visibility = View.GONE
                     if (primaryHasNonBlankLocation) {
                         dismissLoadingOverlay()
+                        if (success) {
+                            hideErrorOverlay()
+                        }
                     }
                 }
             }
@@ -1453,12 +1726,90 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun handleExternalDownloadResponse(response: WebResponse) {
+        val disposition = findHeaderIgnoreCase(response.headers, "content-disposition")
+        val contentType = findHeaderIgnoreCase(response.headers, "content-type")
+        val fileName = DownloadHelper.extractFileName(response.uri, disposition, contentType)
+        val mimeType = DownloadHelper.resolveMimeType(contentType, fileName)
+        val body = response.body
+        if (body == null) {
+            if (response.uri.startsWith("http://", ignoreCase = true) || response.uri.startsWith("https://", ignoreCase = true)) {
+                openExternalBrowser(response.uri)
+            } else {
+                Toast.makeText(this, getString(R.string.download_failed, fileName), Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+
+        Toast.makeText(this, getString(R.string.download_started, fileName), Toast.LENGTH_SHORT).show()
+        downloadExecutor.execute {
+            val savedName = runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val values = ContentValues().apply {
+                        put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                        put(MediaStore.Downloads.MIME_TYPE, mimeType)
+                        put(MediaStore.Downloads.IS_PENDING, 1)
+                    }
+                    val resolver = contentResolver
+                    val itemUri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                        ?: error("无法创建下载文件记录")
+                    try {
+                        val out = resolver.openOutputStream(itemUri) ?: error("无法写入下载目标")
+                        out.use { stream ->
+                            body.use { input -> input.copyTo(stream) }
+                        }
+                        val done = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
+                        resolver.update(itemUri, done, null, null)
+                        fileName
+                    } catch (t: Throwable) {
+                        runCatching { resolver.delete(itemUri, null, null) }
+                        throw t
+                    }
+                } else {
+                    val dir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: filesDir
+                    if (!dir.exists()) dir.mkdirs()
+                    var outFile = File(dir, fileName)
+                    if (outFile.exists()) {
+                        val stem = fileName.substringBeforeLast('.', fileName)
+                        val ext = fileName.substringAfterLast('.', "")
+                        outFile = File(dir, if (ext.isNotEmpty() && fileName.contains('.')) "${stem}_${System.currentTimeMillis()}.$ext" else "${fileName}_${System.currentTimeMillis()}")
+                    }
+                    FileOutputStream(outFile).use { stream ->
+                        body.use { input -> input.copyTo(stream) }
+                    }
+                    outFile.name
+                }
+            }
+            mainHandler.post {
+                if (isFinishing || isDestroyed) return@post
+                savedName.onSuccess { name ->
+                    Toast.makeText(this, getString(R.string.download_saved, name), Toast.LENGTH_LONG).show()
+                }.onFailure { err ->
+                    Log.w(TAG, "Download failed for $fileName", err)
+                    Toast.makeText(this, getString(R.string.download_failed, err.message ?: "IO 错误"), Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    private fun findHeaderIgnoreCase(headers: Map<String, String>?, targetName: String): String? {
+        if (headers.isNullOrEmpty()) return null
+        for ((k, v) in headers) {
+            if (k.equals(targetName, ignoreCase = true)) {
+                return v
+            }
+        }
+        return null
+    }
+
     private fun recoverSession(crashedSession: GeckoSession, isPopup: Boolean) {
         if (isPopup) {
             closePopupSession()
             Toast.makeText(this, "弹窗会话已重置", Toast.LENGTH_SHORT).show()
             return
         }
+        app.extensionBridge.resetSessionState()
+        cancelInstanceConnectWatch()
         geckoView.releaseSession()
         if (crashedSession.isOpen) {
             crashedSession.close()
@@ -1468,7 +1819,19 @@ class MainActivity : AppCompatActivity() {
         primarySession.setPriorityHint(GeckoSession.PRIORITY_HIGH)
         primarySession.open(runtime)
         geckoView.setSession(primarySession)
-        primarySession.loadUri(currentUrl)
+
+        val targetUrl = if (UrlPolicy.isRememberableRemoteUrl(currentUrl)) currentUrl else currentSettings.homeUrl
+        currentUrl = targetUrl
+        if (!crashRecoveryGuard.recordCrashAndShouldRecover(System.currentTimeMillis())) {
+            lastFailedUrl = targetUrl
+            showErrorOverlay(getString(R.string.crash_loop_title), getString(R.string.crash_loop_detail))
+            return
+        }
+
+        if (UrlPolicy.isRememberableRemoteUrl(targetUrl)) {
+            armInstanceConnectWatch()
+        }
+        primarySession.loadUri(targetUrl)
         Toast.makeText(this, "页面渲染进程已自动恢复", Toast.LENGTH_SHORT).show()
     }
 
@@ -1598,7 +1961,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateExtStatusLabel(state: BridgeState) {
         val text = when {
-            state.ready -> "汉化已就绪 v${state.version ?: "1.1.0"} · 已译 ${state.translatedCount} 处"
+            state.ready -> "汉化已就绪 v${state.version ?: "1.1.1"} · 已译 ${state.translatedCount} 处"
             state.connected -> "汉化插件：已连接，初始化中..."
             else -> "汉化插件：等待端口连接..."
         }
@@ -1661,22 +2024,46 @@ class MainActivity : AppCompatActivity() {
         try {
             if (url.startsWith("intent:", ignoreCase = true)) {
                 val parsed = Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
-                try {
-                    startActivity(parsed)
-                    return
-                } catch (_: ActivityNotFoundException) {
-                    val fallbackUrl = parsed.getStringExtra("browser_fallback_url")
-                    if (!fallbackUrl.isNullOrBlank()) {
-                        when (UrlPolicy.classify(fallbackUrl)) {
-                            UrlAction.IN_APP -> primarySession.loadUri(fallbackUrl)
-                            UrlAction.EXTERNAL_BROWSER -> openExternalBrowser(fallbackUrl)
-                            else -> Unit
-                        }
+                parsed.component = null
+                parsed.selector = null
+                parsed.flags = parsed.flags and (
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                        Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+                        Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+                    ).inv()
+                parsed.addCategory(Intent.CATEGORY_BROWSABLE)
+
+                val schemeSafe = parsed.scheme == null || UrlPolicy.isSafeExternalIntentScheme(parsed.scheme)
+                val targetNotSelf = parsed.`package` != packageName
+                if (schemeSafe && targetNotSelf) {
+                    try {
+                        startActivity(parsed)
+                        return
+                    } catch (_: ActivityNotFoundException) {
+                        // Fall through to safe browser fallback URL
                     }
+                }
+                val fallbackUrl = parsed.getStringExtra("browser_fallback_url")
+                if (!fallbackUrl.isNullOrBlank()) {
+                    when (UrlPolicy.classify(fallbackUrl)) {
+                        UrlAction.IN_APP -> primarySession.loadUri(fallbackUrl)
+                        UrlAction.EXTERNAL_BROWSER -> openExternalBrowser(fallbackUrl)
+                        else -> Unit
+                    }
+                } else {
+                    Toast.makeText(this, R.string.external_browser_error, Toast.LENGTH_SHORT).show()
                 }
                 return
             }
-            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+            val parsedUri = Uri.parse(url)
+            if (!UrlPolicy.isSafeExternalIntentScheme(parsedUri.scheme)) {
+                return
+            }
+            val externalIntent = Intent(Intent.ACTION_VIEW, parsedUri).apply {
+                addCategory(Intent.CATEGORY_BROWSABLE)
+            }
+            startActivity(externalIntent)
         } catch (_: ActivityNotFoundException) {
             Toast.makeText(this, R.string.external_browser_error, Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {

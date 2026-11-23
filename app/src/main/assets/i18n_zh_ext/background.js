@@ -2,7 +2,7 @@
   "use strict";
 
   const NATIVE_APP_ID = "ag_remote_i18n";
-  const EXT_VERSION = "1.1.0";
+  const EXT_VERSION = "1.1.1";
   const TAB_URL_PATTERNS = [
     "https://antigravity.google.com/*",
     "https://*.antigravity.google.com/*",
@@ -338,6 +338,15 @@
       }
       lastStatsCount = recomputeTotalStats();
       sendToNative({ type: "STATS", translatedCount: lastStatsCount });
+      return Promise.resolve({ ok: true, total: lastStatsCount });
+    }
+
+    if (msg.type === "FRAME_UNLOAD") {
+      const key = getSenderKey(sender);
+      if (frameStatsMap.delete(key)) {
+        lastStatsCount = recomputeTotalStats();
+        sendToNative({ type: "STATS", translatedCount: lastStatsCount });
+      }
       return Promise.resolve({ ok: true, total: lastStatsCount });
     }
 
